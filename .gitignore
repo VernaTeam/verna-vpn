@@ -1,0 +1,87 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Release signing -- the keystore and its passwords never leave this machine.
+# Losing verna-release.jks means no signed update to an installed app is
+# possible again, ever: Android identifies an app by its signature.
+android/key.properties
+android/*.jks
+
+# ---------------------------------------------------------------------------
+# Never publish
+# ---------------------------------------------------------------------------
+# The upload key and its passwords. Whoever holds these can sign an update that
+# Android will install over this app without warning, so they stay on the one
+# machine that builds releases. If they ever do leak, the only remedy is a new
+# key and a new package name -- there is no revoking one.
+android/key.properties
+android/*.jks
+android/app/*.jks
+*.keystore
+
+# The backend bot's source, which was dropped in here as a reference and is a
+# different project with its own tokens.
+verna_bot_src.zip
+
+# Build output and local scratch.
+build/
+*.apk
+*.aab
+pubspec.yaml.bak
+VernaVPN-UI.jfif
+*.zip
+
+# The internal design brief. It names the VPS and its filesystem paths, which
+# is the sort of thing that is fine on one laptop and permanent on GitHub.
+verna_app_brief.md
+
+# Continuation notes for the next session: local paths, machine details.
+HANDOFF-*.md
+
+# Pre-edit backups.
+*.bak
+*.bak-*
+*.orig

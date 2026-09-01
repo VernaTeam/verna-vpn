@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The window Android paints from the moment the icon is tapped until Flutter
+  draws its first frame.
+
+  This used to reference @mipmap/ic_launcher as a bitmap. From Android 8 that
+  resource is an adaptive-icon XML rather than a bitmap, so the drawable failed
+  to inflate, the whole layer-list was discarded, and the window fell back to
+  plain black. That was the "few seconds of black screen" this file exists to
+  prevent. It needs a real PNG, which is what splash_logo is.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/verna_background" />
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@drawable/splash_logo" />
+    </item>
+</layer-list>

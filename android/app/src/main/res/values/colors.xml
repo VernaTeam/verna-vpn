@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1F2D3A</color>
+
+    <!--
+      The colour the window is painted while the process starts.
+
+      It was the platform default, which under the OS's dark setting is pure
+      black, and Android shows it from the moment the icon is tapped until
+      Flutter draws its first frame. On a Galaxy J7 that is several seconds of
+      a dead-looking screen. This is the app's own background, so the wait
+      reads as the app opening rather than as nothing happening.
+    -->
+    <color name="verna_background">#0B1020</color>
+</resources>

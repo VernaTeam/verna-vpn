@@ -1,0 +1,5 @@
+{
+  "generated": null,
+  "note": "Empty in the repository on purpose. This bundle holds a snapshot of third-party servers, which goes stale within days and does not belong in a permanent git history. Run tool/fetch_seed_configs.py before a release build to fill it; the app treats an empty bundle as no fallback and behaves correctly without it.",
+  "configs": []
+}

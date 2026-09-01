@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Written after flutter_launcher_icons runs, and deliberately not what it
+  generates: the tool wraps the foreground in <inset android:inset="16%">,
+  which compounds with the scaling already baked into the PNG and shrinks the
+  artwork twice. Size is decided once, in make_icon.py, where it can be seen
+  while it is being chosen.
+
+  Re-running `flutter_launcher_icons` overwrites this file. Restore it
+  afterwards, or the icon quietly shrinks again.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+  <background android:drawable="@color/ic_launcher_background"/>
+  <foreground android:drawable="@drawable/ic_launcher_foreground"/>
+</adaptive-icon>

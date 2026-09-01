@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="LaunchTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@drawable/launch_background</item>
+    </style>
+    <!--
+      Applied once the process has started and until the Flutter UI is drawn.
+      Pinned to the app's own background rather than ?android:colorBackground:
+      that resolves to black under the dark setting, which is what the launch
+      actually looked like.
+    -->
+    <style name="NormalTheme" parent="@android:style/Theme.Black.NoTitleBar">
+        <item name="android:windowBackground">@color/verna_background</item>
+    </style>
+</resources>
