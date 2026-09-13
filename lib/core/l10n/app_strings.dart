@@ -54,6 +54,82 @@ class S {
   String get sessionDuration => _t('مدت اتصال', 'Session');
   String get upload => _t('آپلود', 'Upload');
   String get duration => _t('مدت', 'Duration');
+
+  // User subscriptions.
+  String get subMine => _t('ساب‌های من', 'My subscriptions');
+  String get subMineHint =>
+      _t('لینک ساب خودتان را اضافه کنید', 'Add your own subscription links');
+  String get subAdded => _t('ساب اضافه شده', 'added');
+  String get subAdd => _t('افزودن ساب', 'Add subscription');
+  String get subName => _t('نام (اختیاری)', 'Name (optional)');
+  String get subUrl => _t('لینک ساب', 'Subscription link');
+  String get subPaste => _t('چسباندن', 'Paste');
+  String get subCancel => _t('انصراف', 'Cancel');
+  String get subDelete => _t('حذف', 'Delete');
+  String get subDeleteQ => _t('این ساب و سرورهایش حذف شود؟',
+      'Remove this subscription and its servers?');
+  String get subRefreshAll => _t('به‌روزرسانی همه', 'Refresh all');
+  String get subServers => _t('سرور', 'servers');
+  String get subUpdated => _t('به‌روزرسانی', 'updated');
+  String get subNever => _t('هنوز دریافت نشده', 'not fetched yet');
+  String get subUnsupported => _t('پشتیبانی‌نشده', 'unsupported');
+  String get subEmptyTitle =>
+      _t('هنوز سابی اضافه نکرده‌اید', 'No subscriptions yet');
+  String get subEmptyBody => _t(
+        'اگر لینک ساب شخصی دارید، اینجا اضافه کنید. سرورهایش روی همین گوشی '
+            'تست می‌شوند و در اتصال خودکار اول امتحان می‌شوند.',
+        'If you have a subscription link of your own, add it here. Its '
+            'servers are tested on this phone and tried first when '
+            'connecting automatically.',
+      );
+  String get subPrivacy => _t(
+        'ساب‌های شما فقط روی همین گوشی می‌مانند و هیچ‌وقت به سرور ورنا '
+            'فرستاده نمی‌شوند.',
+        "Your subscriptions stay on this phone. They are never sent to "
+            "Verna's server.",
+      );
+  String get subSectionMine => _t('از ساب‌های شما', 'From your subscriptions');
+  String get subSectionVerna => _t('سرورهای ورنا', 'Verna servers');
+  String get subManage => _t('مدیریت', 'Manage');
+  String get subErrInvalidUrl => _t(
+      'لینک معتبر نیست؛ باید با http یا https شروع شود.',
+      'Not a valid link. It must start with http:// or https://');
+  String get subErrDuplicate =>
+      _t('این لینک قبلاً اضافه شده.', 'This link is already added.');
+  String get subErrUnreachable => _t(
+      'به لینک نرسیدیم. اگر روی گیت‌هاب است، بعد از وصل شدن دوباره امتحان کنید.',
+      "Couldn't reach the link. If it's on GitHub, try again while connected.");
+  String get subErrStatus =>
+      _t('سرور ساب خطا برگرداند.', 'The subscription server returned an error.');
+  String get subErrEmpty =>
+      _t('در این لینک کانفیگی پیدا نشد.', 'No configs found at this link.');
+  String get subErrUnsupported => _t(
+      'کانفیگ‌های این لینک با این اپ اجرا نمی‌شوند.',
+      "None of this link's configs can run in this app.");
+  String get subJustNow => _t('همین حالا', 'just now');
+  String get subMinAgo => _t('دقیقه پیش', 'min ago');
+  String get subHourAgo => _t('ساعت پیش', 'h ago');
+  String get subDayAgo => _t('روز پیش', 'd ago');
+  String get subTitle => _t('ساب‌ها', 'Subscriptions');
+  String get subSectionBuiltIn => _t('ساب‌های ورنا', 'Verna subscriptions');
+  String get subBuiltInHint => _t(
+        'به‌طور پیش‌فرض روشن‌اند و سرورهایشان هر روز روی سرور ورنا تست '
+            'می‌شوند. هر کدام را نخواستید خاموش کنید.',
+        "On by default. Their servers are tested on Verna's server every "
+            "day; switch off any you don't want.",
+      );
+  String get subKindMixed => _t('ترکیبی', 'Mixed');
+  String get subHealthy => _t('سالم', 'healthy');
+  String get subOf => _t('از', 'of');
+  String get subWorkHere => _t('روی این گوشی', 'work here');
+  String get subBuiltInLoading =>
+      _t('در حال دریافت ساب‌های ورنا…', 'Loading Verna subscriptions…');
+  String get subBuiltInFailed => _t(
+      'به سرور ورنا نرسیدیم؛ کمی بعد دوباره امتحان کنید.',
+      "Couldn't reach Verna's server. Try again in a moment.");
+  String get subDefaultName => _t('ساب', 'Subscription');
+  String get subStripVerna => _t('ساب ورنا', 'Verna subscriptions');
+  String get subStripMine => _t('ساب شما', 'yours');
   String get statData => _t('داده', 'Data');
   String get securelyConnected =>
       _t('اتصال شما امن است', 'You are securely connected');
@@ -89,6 +165,7 @@ class S {
       _t('اجازهٔ VPN داده نشد', 'VPN permission denied');
   String get fetchFailed =>
       _t('لیست سرورها دریافت نشد', 'Could not fetch the server list');
+  String get noInternet => _t('اینترنت وصل نیست', 'No internet connection');
   String get noCandidates =>
       _t('سرور قابل استفاده‌ای نبود', 'No usable servers');
   String get moreActions => _t('گزینه‌های بیشتر', 'More');

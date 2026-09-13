@@ -12,6 +12,7 @@ import '../domain/local_test.dart';
 import '../domain/tunnel_snapshot.dart';
 import 'candidate_selector.dart';
 import 'known_good_store.dart';
+import 'network_status.dart';
 import 'network_watcher.dart';
 import 'notification_permission.dart';
 import 'singbox_outbound.dart';
@@ -137,11 +138,31 @@ class TunnelService {
   /// probing time rather than memory or sockets.
   static const int _shortlistSize = 80;
 
-  /// How many measured servers are enough to stop looking.
+  /// How many candidates to try without a probe result behind them.
   ///
-  /// The queue is tried in order and the first one that carries traffic wins,
-  /// so ranking the whole shortlist is work whose answer is usually discarded.
-  static const int _enoughRanked = 8;
+  /// The probe can be wrong -- a one-member group reports nothing at all -- so
+  /// a few are still tried when it comes back empty. It is not wrong forty
+  /// times in a row: on RighTel the app tried all forty, fourteen seconds
+  /// each, and spent ten minutes reaching the answer the probe gave in
+  /// thirty-five seconds.
+  static const int _blindAttempts = 4;
+
+  /// Protocols that listen on UDP, which a TCP connect cannot test.
+  ///
+  /// Hysteria and TUIC ride on QUIC, so their port refuses a TCP handshake
+  /// whether the server works or not. The reachability sweep used to drop
+  /// them for exactly that reason; they now pass through to the core's probe,
+  /// which speaks their protocol.
+  static const Set<VpnConfigType> _udpTypes = {
+    VpnConfigType.hysteria,
+    VpnConfigType.tuic,
+  };
+
+  /// What the latency measurement fetches through the finished tunnel.
+  ///
+  /// Plain HTTP and an empty body, so the timing is one request and one
+  /// response rather than a TLS handshake or a download.
+  static const String _latencyProbe = 'http://cp.cloudflare.com/generate_204';
 
   /// How long a probe waits with no new result before calling it finished.
   static const Duration _settleWindow = Duration(seconds: 4);
@@ -389,11 +410,30 @@ class TunnelService {
     _cancelled = false;
     _lastCandidates = candidates;
     _lastUserChose = userChose;
+    // Named in the log, because the row a finger lands on is not always the
+    // row the eye picked -- and "it failed" is only a useful report once it
+    // is certain which server failed.
+    if (userChose && candidates.length == 1) {
+      final chosen = candidates.single;
+      _log.info('Connecting to chosen server',
+          detail: '${chosen.type.label} ${chosen.countryCode} #${chosen.id}');
+    }
     _emit(const TunnelSnapshot(phase: TunnelPhase.preparing));
 
     try {
       await _ensureInitialized();
       await _stop();
+
+      // Also here, because a hand-picked server comes straight to the service
+      // without the provider's fetch -- and would otherwise spend its egress
+      // and reachability timeouts discovering the same thing.
+      if (!await NetworkStatus.hasInternet()) {
+        _emit(const TunnelSnapshot(
+          phase: TunnelPhase.failed,
+          failure: TunnelFailure.noInternet,
+        ));
+        return;
+      }
 
       if (!await _client.requestVPNPermission()) {
         _emit(const TunnelSnapshot(
@@ -442,8 +482,22 @@ class TunnelService {
         attempt: 0,
         total: usable.length,
       ));
-      final reachable = await _reachable(usable);
+      final reachable = await _reachable(usable, fallbackToAll: false);
       if (_cancelled) return;
+
+      // Nothing on the list accepts a connection from this network, and
+      // nothing has worked here before. Every tunnel would fail for the same
+      // reason, so say so now instead of proving it forty times.
+      if (reachable.isEmpty && rememberedConfigs.isEmpty) {
+        _log.warn('No server reachable',
+            detail: '0 of ${usable.length} accepted a connection');
+        _emit(TunnelSnapshot(
+          phase: TunnelPhase.failed,
+          failure: TunnelFailure.noneAnswered,
+          total: usable.length,
+        ));
+        return;
+      }
 
       // The remembered ones are not put through the reachability sweep or the
       // probe: they have carried real traffic from this phone, which is a
@@ -460,106 +514,90 @@ class TunnelService {
         total: shortlist.length,
       ));
 
-      // Let the core rank them: one proxy-mode session, every candidate
-      // measured in parallel by sing-box itself.
+      // Two passes, cheapest first.
       //
-      // Ranking is an optimisation, not a gate. A one-member group reports
-      // nothing at all -- measured on an A54, "1 outbounds -> 0 tested, 0
-      // answered" -- so picking a server by hand failed every time, without
-      // the tunnel being started once. The probe orders the queue when it has
-      // something to say; when it does not, the candidates are tried in the
-      // order they arrived. What decides the outcome either way is the egress
-      // check below, which is the only thing that ever proved anything.
-      // Skip the probe entirely when memory has something to offer: it costs
-      // eight seconds per batch to answer a question already answered by a
-      // connection that worked.
-      final ranked = rememberedConfigs.isNotEmpty || shortlist.length == 1
-          ? const <({VpnConfig config, int milliseconds})>[]
-          : await _rankShortlist(shortlist);
-      if (_cancelled) return;
+      // First, what has already carried traffic from this phone on this
+      // network -- no probe, because a real connection already answered the
+      // question the probe would ask. Then the rest a batch at a time: probe
+      // twenty, try whatever answered, and only probe the next twenty if
+      // none of those carried traffic. Ranking the whole list first spent
+      // forty of fifty-six seconds on a J7 finding servers after the first
+      // one had already been found.
+      //
+      // When the probe finds nobody answering, only [_blindAttempts] are
+      // tried anyway. The queue used to fall back to the whole shortlist: on
+      // RighTel that was forty tunnels at fourteen seconds each, ten minutes
+      // to report a failure the probe had already reported.
+      final remainder = [
+        for (final config in shortlist)
+          if (!rememberedConfigs.any((r) => r.id == config.id)) config,
+      ];
 
-      final queue = ranked.isNotEmpty
-          ? ranked
-          : [for (final config in shortlist) (config: config, milliseconds: 0)];
-      if (queue.isEmpty) {
-        _emit(TunnelSnapshot(
-          phase: TunnelPhase.failed,
-          failure: TunnelFailure.noneAnswered,
-          total: shortlist.length,
-        ));
-        return;
+      var attempt = 0;
+      int total =
+          rememberedConfigs.length + min<int>(remainder.length, _blindAttempts);
+
+      for (final config in rememberedConfigs) {
+        if (_cancelled) return;
+        attempt++;
+        if (await _tryCandidate(config, 0, before, network, attempt, total)) {
+          return;
+        }
       }
 
-      for (var i = 0; i < queue.length; i++) {
-        if (_cancelled) return;
-        final candidate = queue[i];
-        _emit(_snapshot.copyWith(
-          phase: TunnelPhase.searching,
-          attempt: i + 1,
-          total: queue.length,
-        ));
-
-        if (!await _startTunnel(candidate.config)) {
-          await _stop();
-          continue;
+      // A one-member group reports nothing at all -- measured on an A54,
+      // "1 outbounds -> 0 tested, 0 answered" -- so a single candidate is not
+      // probed; it is simply tried.
+      var anyAnswered = remainder.length <= 1;
+      if (remainder.length == 1) {
+        attempt++;
+        total = attempt;
+        if (await _tryCandidate(
+            remainder.single, 0, before, network, attempt, total)) {
+          return;
         }
+      }
 
-        // Timed, because this is the one request that certainly goes through
-        // the finished tunnel. The figure used to come from the core's latency
-        // probe, which no longer runs once memory has an answer -- so a fast
-        // reconnection showed no latency at all. A round trip to a public
-        // endpoint is a coarser number than a urltest, but it is measured on
-        // the connection the user is actually about to use.
-        // Let the route settle before the first request, or the cost of
-        // installing it is charged to the server's latency.
-        await Future<void>.delayed(_tunnelSettle);
+      for (var start = 0;
+          remainder.length > 1 && start < remainder.length;
+          start += _batchSize) {
         if (_cancelled) return;
+        final batch =
+            remainder.sublist(start, min(start + _batchSize, remainder.length));
+        final ranked = await _rank(batch, retryOnlyIfSilent: true);
+        if (_cancelled) return;
+        if (ranked.isEmpty) continue;
 
-        final stopwatch = Stopwatch()..start();
-        final after = await _readEgress(timeout: _verifyBudget);
-        stopwatch.stop();
-        final verdict = _verifyEgress(before, after, candidate.config);
-        if (verdict != null || after == null) {
-          _log.warn('Tunnel carried no traffic',
-              detail: verdict ?? 'no answer through the tunnel');
-          // A remembered server that has stopped working must not keep being
-          // tried first, or the shortcut becomes the slow path.
-          await KnownGoodStore.forget(candidate.config.id, network);
-          await _stop();
-          continue;
+        anyAnswered = true;
+        total = attempt + ranked.length;
+        for (final candidate in ranked) {
+          if (_cancelled) return;
+          attempt++;
+          if (await _tryCandidate(candidate.config, candidate.milliseconds,
+              before, network, attempt, total)) {
+            return;
+          }
         }
+      }
 
-        await KnownGoodStore.remember(
-          candidate.config,
-          network,
-          milliseconds: candidate.milliseconds > 0
-              ? candidate.milliseconds
-              : stopwatch.elapsedMilliseconds,
-        );
-
-        _connectedAt = DateTime.now();
-        _emit(TunnelSnapshot(
-          phase: TunnelPhase.connected,
-          active: candidate.config,
-          exitIp: after.ip,
-          exitCountryCode: after.country,
-          // The probe's figure when there is one -- it measures the proxy
-          // alone -- and otherwise the round trip just taken through the
-          // finished tunnel.
-          pingMs: candidate.milliseconds > 0
-              ? candidate.milliseconds
-              : stopwatch.elapsedMilliseconds,
-          attempt: i + 1,
-          total: queue.length,
-        ));
-        _log.good('Connected', detail: '${after.ip} (${after.country ?? '?'})');
-        return;
+      // Nobody answered a single probe. The probe can be wrong, so a few are
+      // tried anyway -- a few, not the whole list.
+      if (!anyAnswered) {
+        final blind = remainder.take(_blindAttempts).toList();
+        total = attempt + blind.length;
+        for (final config in blind) {
+          if (_cancelled) return;
+          attempt++;
+          if (await _tryCandidate(config, 0, before, network, attempt, total)) {
+            return;
+          }
+        }
       }
 
       _emit(TunnelSnapshot(
         phase: TunnelPhase.failed,
         failure: TunnelFailure.noneAnswered,
-        total: queue.length,
+        total: attempt,
       ));
     } catch (e) {
       await _stop();
@@ -568,6 +606,122 @@ class TunnelService {
         failure: TunnelFailure.error,
         errorDetail: '$e',
       ));
+    }
+  }
+
+  /// Starts [config], proves traffic leaves through it, and publishes the
+  /// connected state. False means move on to the next candidate.
+  Future<bool> _tryCandidate(
+    VpnConfig config,
+    int probeMs,
+    _Egress? before,
+    String network,
+    int attempt,
+    int total,
+  ) async {
+    _emit(_snapshot.copyWith(
+      phase: TunnelPhase.searching,
+      attempt: attempt,
+      total: total,
+    ));
+
+    if (!await _startTunnel(config)) {
+      await _stop();
+      return false;
+    }
+    _log.info('Tunnel up', detail: 'checking that traffic leaves through it');
+
+    // Let the route settle before the first request, or the cost of
+    // installing it is charged to the server.
+    await Future<void>.delayed(_tunnelSettle);
+    if (_cancelled) return false;
+
+    // Each probe's own failure, kept for the log. "No answer through the
+    // tunnel" was all a rejected server ever said, and it covers causes with
+    // different fixes: names that will not resolve inside the tunnel, a route
+    // that swallows connections, a TLS error.
+    final failures = <String>[];
+    final after =
+        await _readEgress(timeout: _verifyBudget, failures: failures);
+    final verdict = _verifyEgress(before, after, config);
+    if (verdict != null || after == null) {
+      // A hand-picked server gets one more question before it is given up
+      // on, because its failure is the one a user asks about: does anything
+      // pass when no name has to be resolved? That tells a server that is
+      // dead in the tunnel from one that only cannot reach the resolver.
+      final withoutDns =
+          _lastUserChose && after == null ? await _probeWithoutDns() : null;
+      _log.warn('Tunnel carried no traffic',
+          detail: [
+            verdict ?? 'no answer through the tunnel',
+            if (after == null && failures.isNotEmpty) failures.join('; '),
+            if (withoutDns != null) withoutDns,
+          ].join(' -- '));
+      // A remembered server that has stopped working must not keep being
+      // tried first, or the shortcut becomes the slow path.
+      await KnownGoodStore.forget(config.id, network);
+      await _stop();
+      return false;
+    }
+
+    final latency = await _measureLatency();
+    final pingMs = latency ?? (probeMs > 0 ? probeMs : null);
+
+    await KnownGoodStore.remember(config, network, milliseconds: pingMs);
+
+    _connectedAt = DateTime.now();
+    _emit(TunnelSnapshot(
+      phase: TunnelPhase.connected,
+      active: config,
+      exitIp: after.ip,
+      exitCountryCode: after.country,
+      pingMs: pingMs,
+      attempt: attempt,
+      total: total,
+    ));
+    _log.good('Connected',
+        detail: '${after.ip} (${after.country ?? '?'}), '
+            '${pingMs == null ? 'latency unknown' : '$pingMs ms'}');
+    return true;
+  }
+
+  /// Round trip through the finished tunnel, on a connection already open.
+  ///
+  /// What the screen called "ping" used to be either the core's urltest delay
+  /// or the time the whole verification took. Both include setting up a
+  /// connection -- the TCP handshake to the server, the proxy's own
+  /// handshake, and for the verification a TLS handshake on top -- so a
+  /// server 250ms away read as 546ms, 1900ms, 3291ms. That measures how long
+  /// a new connection takes to open, not how far away the server is.
+  ///
+  /// So this opens one connection, discards the first request (it pays for
+  /// the setup), and times the next two on the same socket. The faster of
+  /// those is one request and one response through the tunnel, which is what
+  /// a person means by ping.
+  Future<int?> _measureLatency() async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 5)
+      ..idleTimeout = const Duration(seconds: 10);
+    try {
+      int? best;
+      for (var i = 0; i < 3; i++) {
+        final stopwatch = Stopwatch()..start();
+        final request = await client
+            .getUrl(Uri.parse(_latencyProbe))
+            .timeout(const Duration(seconds: 5));
+        final response =
+            await request.close().timeout(const Duration(seconds: 5));
+        await response.drain<void>();
+        stopwatch.stop();
+        if (i == 0) continue;
+        final ms = stopwatch.elapsedMilliseconds;
+        if (best == null || ms < best) best = ms;
+      }
+      return best;
+    } catch (_) {
+      return null;
+    } finally {
+      client.close(force: true);
     }
   }
 
@@ -661,32 +815,10 @@ class TunnelService {
   /// retry: sing-box measures a urltest group itself, in parallel, and reports
   /// per-outbound delays. No TUN device is created, so nothing here can
   /// disturb a connection or leave a descriptor behind.
-  /// Ranks a connect shortlist, a batch at a time, stopping when it has enough.
-  ///
-  /// [_rank] measures every candidate it is given simultaneously, which is fine
-  /// for twenty and ruinous for eighty: they share one radio, and a server that
-  /// loses that race is recorded as dead. So the shortlist is fed through in
-  /// batches, and the sweep stops as soon as enough servers have answered to
-  /// make a queue worth trying -- there is no value in ranking the sixtieth
-  /// option when the first eight are already known to work.
-  Future<List<({VpnConfig config, int milliseconds})>> _rankShortlist(
-    List<VpnConfig> shortlist,
-  ) async {
-    final found = <({VpnConfig config, int milliseconds})>[];
-    for (var start = 0; start < shortlist.length; start += _batchSize) {
-      if (_cancelled) break;
-      final batch =
-          shortlist.sublist(start, min(start + _batchSize, shortlist.length));
-      found.addAll(await _rank(batch));
-      if (found.length >= _enoughRanked) break;
-    }
-    found.sort((a, b) => a.milliseconds.compareTo(b.milliseconds));
-    return found;
-  }
-
   Future<List<({VpnConfig config, int milliseconds})>> _rank(
-    List<VpnConfig> candidates,
-  ) async {
+    List<VpnConfig> candidates, {
+    bool retryOnlyIfSilent = false,
+  }) async {
     if (candidates.isEmpty) return const [];
 
     final tags = <String, VpnConfig>{};
@@ -738,6 +870,9 @@ class TunnelService {
         await _awaitGroupTested(outbounds.length);
         // Everyone answered, so a second race would only cost time.
         if (_delays.length >= outbounds.length) break;
+        // A connection needs one server that works, not a complete ranking:
+        // if anyone answered, try them before spending another pass.
+        if (retryOnlyIfSilent && _delays.isNotEmpty) break;
         if (pass < _probePasses) {
           _log.info('Probe retrying',
               detail: '${_delays.length} of ${outbounds.length} answered');
@@ -970,7 +1105,10 @@ class TunnelService {
   /// A VPN-mode config for one chosen server.
   String _tunnelConfig(Map<String, dynamic> outbound, VpnConfig config) {
     return jsonEncode({
-      'log': {'level': 'error'},
+      // Warnings too, not only errors: a DNS exchange failing inside the
+      // tunnel is not always logged at error level, and the core's own account
+      // of it is what tells a resolver problem apart from a dead server.
+      'log': {'level': 'warn'},
       'dns': {
         // The 1.12 server format, not the `address:` one every share-config
         // tutorial still shows: sing-box 1.14 removed the legacy shape and
@@ -999,6 +1137,9 @@ class TunnelService {
           // 1.14 ("detour to an empty direct outbound makes no sense"), and
           // direct is what a server without one does anyway.
           {'tag': 'local', 'type': 'udp', 'server': '8.8.8.8'},
+          // The phone's own resolver, for one job only: finding the proxy
+          // server itself. See default_domain_resolver below.
+          {'tag': 'system', 'type': 'local'},
         ],
         // Resolved through the tunnel, so name lookups cannot leak to a
         // resolver that is being tampered with locally.
@@ -1025,6 +1166,22 @@ class TunnelService {
       ],
       'route': {
         'auto_detect_interface': true,
+        // How the core finds a server published under a name, not an address.
+        //
+        // Unset, it asked dns.final -- DNS over HTTPS *through the proxy*,
+        // which cannot be reached before the proxy's address is known. Every
+        // such server was dead in the tunnel while passing the device test,
+        // whose config has no dns block and so uses the system resolver.
+        // Measured on a J7 on 2026-09-13: a Trojan server under a .ir name
+        // tested green at 226 ms, then "Tunnel carried no traffic -- 1.1.1.1:
+        // connection reset; ip-api.com, api.ipify.org: connect timed out".
+        // About one verified server in ten has a name for an address, and six
+        // Trojan servers in ten do.
+        //
+        // The system resolver is what the device test already relies on, and
+        // it leaks nothing a connection to that server would not show anyway.
+        // Every other lookup still goes through the tunnel.
+        'default_domain_resolver': 'system',
         'rules': [
           // Sniffing first, so the router can tell what a connection carries.
           {'action': 'sniff'},
@@ -1070,8 +1227,16 @@ class TunnelService {
 
   /// Drops candidates whose server will not accept a TCP connection, ordered
   /// by how quickly it did.
-  Future<List<VpnConfig>> _reachable(List<VpnConfig> candidates) async {
+  Future<List<VpnConfig>> _reachable(
+    List<VpnConfig> candidates, {
+    bool fallbackToAll = true,
+  }) async {
     final checks = candidates.map((config) async {
+      // Kept, untested, and sorted after everything that answered: see
+      // [_udpTypes]. The core's probe decides whether they work.
+      if (_udpTypes.contains(config.type)) {
+        return (config: config, micros: 1 << 29);
+      }
       final endpoint = CandidateSelector.endpointOf(config);
       if (endpoint == null) return (config: config, micros: 1 << 30);
       final stopwatch = Stopwatch()..start();
@@ -1089,9 +1254,12 @@ class TunnelService {
     final results = (await Future.wait(checks)).nonNulls.toList()
       ..sort((a, b) => a.micros.compareTo(b.micros));
     final live = results.map((r) => r.config).toList();
-    // Everything failing usually means the phone is offline, not that the whole
-    // pool died at once.
-    return live.isEmpty ? candidates : live;
+    // With [fallbackToAll], nothing reachable is read as "probably offline"
+    // and the whole list comes back, which suits the server list. The connect
+    // path turns it off: there, nothing reachable is an answer, and treating
+    // it as "try everything" was the longest route to the same failure.
+    if (live.isEmpty && fallbackToAll) return candidates;
+    return live;
   }
 
   /// Asks, through the tunnel, where traffic is coming out.
@@ -1108,38 +1276,129 @@ class TunnelService {
   /// Racing them costs nothing extra: they are three small requests, and a
   /// tunnel that cannot answer any of them in [timeout] is not one worth
   /// waiting longer for.
-  Future<_Egress?> _readEgress({required Duration timeout}) async {
-    _Egress? best;
+  Future<_Egress?> _readEgress({
+    required Duration timeout,
+    List<String>? failures,
+  }) async {
+    // The comment above always described this; the code did not. It used
+    // Future.wait, which returns when the *last* probe finishes -- and one
+    // probe is 1.1.1.1, blocked from Iran, so outside the tunnel every reading
+    // ran to its full timeout however fast ip-api answered. A Completer
+    // returns on the first reading that carries a country.
+    final answer = Completer<_Egress?>();
+    final clients = <Dio>[];
+    _Egress? partial;
+    var pending = _egressProbes.length;
 
-    Future<_Egress?> probe(String url) async {
+    void settle() {
+      pending--;
+      if (pending == 0 && !answer.isCompleted) answer.complete(partial);
+    }
+
+    for (final url in _egressProbes) {
       final dio = Dio(BaseOptions(
         connectTimeout: timeout,
         receiveTimeout: timeout,
         responseType: ResponseType.plain,
       ));
-      try {
-        final res = await dio.get<String>(url);
-        return _parseEgress(res.data ?? '');
-      } catch (_) {
-        return null;
-      } finally {
+      clients.add(dio);
+      dio.get<String>(url).then<void>((res) {
+        final reading = _parseEgress(res.data ?? '');
+        if (reading == null) {
+          failures?.add('${_hostOf(url)}: unreadable reply');
+          return;
+        }
+        // A reading with a country settles the question at once; one without
+        // only half answers it and is kept in case nothing better arrives.
+        if (reading.country != null) {
+          if (!answer.isCompleted) answer.complete(reading);
+        } else {
+          partial ??= reading;
+        }
+      }, onError: (Object e) {
+        failures?.add('${_hostOf(url)}: ${_whyFailed(e)}');
+      }).whenComplete(settle);
+    }
+
+    try {
+      return await answer.future.timeout(
+        timeout + const Duration(seconds: 2),
+        onTimeout: () => partial,
+      );
+    } finally {
+      // The losers are cut off rather than left to run out their timeouts in
+      // the background, still holding sockets through a tunnel that may be
+      // about to be torn down.
+      for (final dio in clients) {
         dio.close(force: true);
       }
     }
+  }
 
-    final results = await Future.wait(
-      _egressProbes.map(probe),
-    ).timeout(timeout + const Duration(seconds: 2),
-        onTimeout: () => const <_Egress?>[]);
+  /// Asked through a tunnel that just failed its egress check, by address, so
+  /// no name has to resolve. Never used to pass a tunnel -- a tunnel whose
+  /// names do not resolve is useless however well it carries bytes -- only to
+  /// say why one failed.
+  static const List<String> _dnsFreeProbes = [
+    // ip-api.com by its address: not Cloudflare, no DNS. Answers means the
+    // tunnel carries traffic and the failure is the resolver.
+    'http://208.95.112.1/json',
+    // Google's DNS-over-HTTPS, by address. Answers means a resolver other
+    // than 1.1.1.1 would have worked through this server.
+    'https://8.8.8.8/resolve?name=example.com&type=A',
+  ];
 
-    for (final reading in results) {
-      if (reading == null) continue;
-      // A reading with a country settles the question; one without only half
-      // answers it, so it is kept in case nothing better arrives.
-      if (reading.country != null) return reading;
-      best ??= reading;
+  Future<String> _probeWithoutDns() async {
+    final answers = await Future.wait([
+      for (final url in _dnsFreeProbes) _probeOnce(url),
+    ]);
+    return 'without DNS: ${answers.join('; ')}';
+  }
+
+  Future<String> _probeOnce(String url) async {
+    const timeout = Duration(seconds: 6);
+    final dio = Dio(BaseOptions(
+      connectTimeout: timeout,
+      receiveTimeout: timeout,
+      responseType: ResponseType.plain,
+    ));
+    try {
+      final res = await dio.get<String>(url);
+      return '${_hostOf(url)}: answered ${res.statusCode}';
+    } catch (e) {
+      return '${_hostOf(url)}: ${_whyFailed(e)}';
+    } finally {
+      dio.close(force: true);
     }
-    return best;
+  }
+
+  static String _hostOf(String url) => Uri.tryParse(url)?.host ?? url;
+
+  /// A probe's failure in the fewest words that still separate the causes: a
+  /// name that would not resolve points at DNS inside the tunnel, a timeout at
+  /// a route that swallows the connection, a handshake error at something
+  /// rewriting it.
+  static String _whyFailed(Object error) {
+    if (error is DioException) {
+      final inner = error.error;
+      if (inner is SocketException) {
+        if (inner.message.toLowerCase().contains('host lookup')) {
+          return 'name did not resolve';
+        }
+        return 'socket: ${inner.osError?.message ?? inner.message}';
+      }
+      if (inner is HandshakeException) return 'TLS handshake failed';
+      return switch (error.type) {
+        DioExceptionType.connectionTimeout => 'connect timed out',
+        DioExceptionType.receiveTimeout => 'no reply in time',
+        DioExceptionType.sendTimeout => 'send timed out',
+        DioExceptionType.badResponse =>
+          'HTTP ${error.response?.statusCode ?? '?'}',
+        DioExceptionType.cancel => 'cut off',
+        _ => error.type.name,
+      };
+    }
+    return error.runtimeType.toString();
   }
 
   _Egress? _parseEgress(String body) {

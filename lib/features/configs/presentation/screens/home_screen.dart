@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../diagnostics/data/app_log.dart';
+import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
+import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
 import '../../domain/vpn_config.dart';
+import '../../../tunnel/domain/local_test.dart';
 import '../providers/configs_provider.dart';
 import '../providers/local_test_provider.dart';
 import '../../../tunnel/presentation/providers/tunnel_provider.dart';
@@ -38,9 +41,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _autoTest());
   }
 
-  /// Guards against starting the same automatic run twice: the post-frame
-  /// call and the "configs arrived" listener both lead here.
+  /// Whether an automatic run has ever started on this screen.
+  ///
+  /// Not a "never again" latch: rows arrive in waves -- a user's own
+  /// subscriptions are in memory immediately, Verna's pool a moment later from
+  /// the API -- and the first wave used to consume the only run there was.
   bool _autoTestStarted = false;
+
+  /// The ids of the rows as last built, and when that order last changed.
+  List<String> _lastOrder = const [];
+  DateTime _orderChangedAt = DateTime.fromMillisecondsSinceEpoch(0);
+
+  /// How long a tap is ignored after the rows move. Long enough to cover
+  /// seeing a row and tapping it, short enough not to be noticed otherwise --
+  /// the list re-sorts once per batch, every ten to twenty seconds.
+  static const Duration _tapSettle = Duration(milliseconds: 700);
+
+  bool _tapAllowed() =>
+      DateTime.now().difference(_orderChangedAt) >= _tapSettle;
+
+  /// Both halves of the list: Verna's pool and the built-in subscriptions.
+  Future<void> _refreshAll() => Future.wait([
+        ref.read(configsProvider.notifier).refresh(),
+        ref.read(builtInSubscriptionsProvider.notifier).refresh(),
+      ]);
+
+  /// How many untested rows have to appear before a second run is worth it.
+  /// One or two late arrivals are not; three hundred are.
+  static const int _autoTestMinNewRows = 10;
 
   /// Starts a run unless one is already going, or a tunnel is up.
   ///
@@ -56,7 +84,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       'running=${ref.read(localTestProgressProvider).running}',
       'rows=${ref.read(filteredConfigsProvider).length}',
     ].join(' '));
-    if (!mounted || _autoTestStarted) return;
+    if (!mounted) return;
     if (ref.read(tunnelSnapshotProvider).isConnected) {
       AppLog.instance.info('Auto-test skipped', detail: 'a tunnel is up');
       return;
@@ -66,10 +94,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     // Nothing to test yet -- the list is still loading. The listener in build
     // calls back once it arrives.
     if (configs.isEmpty) return;
+
+    // Only what has no answer yet. Re-testing rows this device has already
+    // measured would cost minutes and change nothing.
+    final results = ref.read(localTestResultsProvider);
+    final pending =
+        configs.where((c) => !results.containsKey(c.id)).toList();
+    if (pending.isEmpty) return;
+    if (_autoTestStarted && pending.length < _autoTestMinNewRows) return;
+
     _autoTestStarted = true;
-    AppLog.instance
-        .info('Auto-test starting', detail: '${configs.length} rows');
-    ref.read(localTestResultsProvider.notifier).run(configs);
+    AppLog.instance.info('Auto-test starting',
+        detail: '${pending.length} of ${configs.length} rows untested');
+    ref.read(localTestResultsProvider.notifier).run(pending);
   }
 
   @override
@@ -92,6 +129,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       filteredConfigsProvider,
       (_, next) {
         if (next.isNotEmpty) _autoTest();
+      },
+    );
+
+    // And again when a run ends.
+    //
+    // Rows arrive in waves: a user's own subscriptions are in memory at once,
+    // Verna's pool a few seconds later from the API. Measured on a J7, the
+    // pool landed three seconds into the first run -- and a run in progress
+    // makes _autoTest() return, so those 314 rows stayed "Not tested" until
+    // someone pressed the button. Listening for the run to finish closes that
+    // window; _autoTest() itself decides whether anything is left to do.
+    ref.listen<LocalTestProgress>(
+      localTestProgressProvider,
+      (previous, next) {
+        if ((previous?.running ?? false) && !next.running) _autoTest();
       },
     );
 
@@ -180,7 +232,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             tooltip: s.retry,
             onPressed: state.isLoading
                 ? null
-                : () => ref.read(configsProvider.notifier).refresh(),
+                : _refreshAll,
           ),
           Stack(
             alignment: Alignment.topRight,
@@ -210,6 +262,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       body: Column(
         children: [
           const _TestStatusBar(),
+          const _SubscriptionsStrip(),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
             child: TextField(
@@ -271,7 +324,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             Text(s.error, style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 16),
             FilledButton.icon(
-              onPressed: () => ref.read(configsProvider.notifier).refresh(),
+              onPressed: _refreshAll,
               icon: const Icon(Icons.refresh_rounded),
               label: Text(s.retry),
             ),
@@ -301,15 +354,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
       );
     }
+    // The user's own servers come first in the visible list (see
+    // visibleConfigsProvider); when there are any, both groups get a header so
+    // it is clear which rows are theirs and which are Verna's.
+    final rows = configs.cast<VpnConfig>();
+
+    // Only the top of the list counts: that is where a tap lands, and
+    // comparing hundreds of ids on every rebuild buys nothing.
+    final order = [for (final c in rows.take(30)) c.id];
+    if (!_sameOrder(order, _lastOrder)) {
+      if (_lastOrder.isNotEmpty) _orderChangedAt = DateTime.now();
+      _lastOrder = order;
+    }
+
+    final mineCount = rows.takeWhile((c) => c.isFromUserSubscription).length;
+    final withHeaders = mineCount > 0;
+    final entries = <Object>[
+      if (withHeaders) _Section.mine,
+      ...rows.take(mineCount),
+      if (withHeaders && rows.length > mineCount) _Section.verna,
+      ...rows.skip(mineCount),
+    ];
+
     return RefreshIndicator(
-      onRefresh: () => ref.read(configsProvider.notifier).refresh(),
+      onRefresh: _refreshAll,
       child: ListView.builder(
         physics: const AlwaysScrollableScrollPhysics(),
-        itemCount: configs.length,
+        itemCount: entries.length,
         itemBuilder: (context, index) {
-          final cfg = configs[index];
+          final entry = entries[index];
+          if (entry is _Section) {
+            return _SectionHeader(section: entry, s: s);
+          }
+          final cfg = entry as VpnConfig;
           return ConfigCard(
+            // Keyed by server, so a row that moves takes its gesture with it:
+            // a press that began on one server cannot end as a tap on the one
+            // that slid into its place.
+            key: ValueKey(cfg.id),
             config: cfg,
+            tapGuard: _tapAllowed,
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
@@ -321,6 +405,71 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
   }
+}
+
+/// The subscriptions behind the list, one tap away from it.
+///
+/// Settings is a tab away from where someone is looking at servers. This
+/// line says what the list is made of -- how many of Verna's lists are on, how
+/// many servers in them are healthy -- and opens the screen that manages them.
+class _SubscriptionsStrip extends ConsumerWidget {
+  const _SubscriptionsStrip();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(stringsProvider);
+    final c = context.verna;
+    final builtIn = ref.watch(builtInSubscriptionsProvider);
+    final mine =
+        ref.watch(userSubscriptionsProvider.select((st) => st.items.length));
+
+    final on = [
+      for (final sub in builtIn.items)
+        if (builtIn.isEnabled(sub.id)) sub,
+    ];
+    final healthy = on.fold<int>(0, (n, sub) => n + sub.healthy);
+    final label = builtIn.items.isEmpty
+        ? (builtIn.loading ? s.subBuiltInLoading : s.subTitle)
+        : [
+            '${on.length} ${s.subStripVerna}',
+            '$healthy ${s.subHealthy}',
+            if (mine > 0) '$mine ${s.subStripMine}',
+          ].join('  ·  ');
+
+    return Material(
+      color: c.background,
+      child: InkWell(
+        onTap: () => Navigator.pushNamed(context, '/subscriptions'),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 9, 10, 9),
+          child: Row(
+            children: [
+              Icon(Icons.playlist_add_check_rounded,
+                  size: 17, color: c.accent),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                ),
+              ),
+              Icon(Icons.chevron_right_rounded, size: 18, color: c.textMuted),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+bool _sameOrder(List<String> a, List<String> b) {
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }
 
 /// What this device has found so far, in one line.
@@ -420,6 +569,46 @@ class _ActiveFilterChips extends ConsumerWidget {
                     ref.read(filterProvider.notifier).toggleCountry(code),
                 deleteIcon: const Icon(Icons.close_rounded, size: 16),
               ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+enum _Section { mine, verna }
+
+/// A group label in the server list, with a way to the subscriptions screen
+/// on the user's own group.
+class _SectionHeader extends StatelessWidget {
+  const _SectionHeader({required this.section, required this.s});
+
+  final _Section section;
+  final S s;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.verna;
+    final mine = section == _Section.mine;
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, mine ? 8 : 16, 8, 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              (mine ? s.subSectionMine : s.subSectionVerna).toUpperCase(),
+              style: TextStyle(
+                color: c.textFaint,
+                fontSize: 10.5,
+                letterSpacing: 0.12,
+                fontFamily: VernaType.mono,
+              ),
+            ),
+          ),
+          if (mine)
+            TextButton(
+              onPressed: () => Navigator.pushNamed(context, '/subscriptions'),
+              child: Text(s.subManage, style: const TextStyle(fontSize: 12.5)),
             ),
         ],
       ),

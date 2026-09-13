@@ -193,33 +193,10 @@ class ConfigRepository {
     }
   }
 
-  Map<String, dynamic> _configToMap(VpnConfig c) => {
-        'id': c.id,
-        'type': c.type.name,
-        'kind': c.kind.name,
-        'content': c.content,
-        'downloadUrl': c.downloadUrl,
-        'fileExtension': c.fileExtension,
-        'country': c.country,
-        'flag': c.flag,
-        'countryCode': c.countryCode,
-        'pingMs': c.pingMs,
-        'foundAt': c.foundAt?.toIso8601String(),
-      };
+  // The row's own JSON, same keys as before plus what was added since -- the
+  // built-in subscription id among them, without which a switched-off list's
+  // servers would come back through the fallback cache.
+  Map<String, dynamic> _configToMap(VpnConfig c) => c.toJson();
 
-  VpnConfig _configFromMap(Map<String, dynamic> m) => VpnConfig(
-        id: m['id'] as String,
-        type: VpnConfigType.fromString(m['type'] as String),
-        kind: m['kind'] == 'file' ? VpnConfigKind.file : VpnConfigKind.text,
-        content: m['content'] as String?,
-        downloadUrl: m['downloadUrl'] as String?,
-        fileExtension: m['fileExtension'] as String?,
-        country: m['country'] as String? ?? '',
-        flag: m['flag'] as String? ?? '',
-        countryCode: m['countryCode'] as String? ?? '',
-        pingMs: m['pingMs'] as int?,
-        foundAt: m['foundAt'] != null
-            ? DateTime.tryParse(m['foundAt'] as String)
-            : null,
-      );
+  VpnConfig _configFromMap(Map<String, dynamic> m) => VpnConfig.fromJson(m);
 }

@@ -19,6 +19,17 @@ class VpnConfig {
   /// behind it is alive.
   final DateTime? verifiedAt;
 
+  /// The user's own subscription this row came from, or null for Verna's
+  /// pool. Carried on the row so the list can group it and the automatic
+  /// connection can put it first. Never shown on the row itself: a
+  /// subscription's name can be a publisher's.
+  final String? subscriptionName;
+
+  /// The built-in subscription this row came from, or null. An id, not a
+  /// name -- the server keeps the names -- used to leave out the rows of a
+  /// list the user switched off.
+  final int? builtInSubId;
+
   const VpnConfig({
     required this.id,
     required this.type,
@@ -33,6 +44,8 @@ class VpnConfig {
     this.quality = 0,
     this.foundAt,
     this.verifiedAt,
+    this.subscriptionName,
+    this.builtInSubId,
   });
 
   /// Whether the latency figure came from a real tunnel rather than a TCP
@@ -42,6 +55,8 @@ class VpnConfig {
 
   bool get isText => kind == VpnConfigKind.text;
   bool get isFile => kind == VpnConfigKind.file;
+
+  bool get isFromUserSubscription => subscriptionName != null;
 
   /// Absolute download URL. The API returns a relative path; callers that need
   /// a full URL (QR, download) should use this with the configured base.
@@ -60,6 +75,42 @@ class VpnConfig {
     if (quality >= 40) return QualityLevel.medium;
     return QualityLevel.low;
   }
+
+  /// For on-device caches. [type] is stored by its Dart name and read back
+  /// through [VpnConfigType.fromString], which accepts both spellings.
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'type': type.name,
+        'kind': kind.name,
+        'content': content,
+        'downloadUrl': downloadUrl,
+        'fileExtension': fileExtension,
+        'country': country,
+        'flag': flag,
+        'countryCode': countryCode,
+        'pingMs': pingMs,
+        'quality': quality,
+        'foundAt': foundAt?.toIso8601String(),
+        'verifiedAt': verifiedAt?.toIso8601String(),
+        'builtInSubId': builtInSubId,
+      };
+
+  factory VpnConfig.fromJson(Map<String, dynamic> m) => VpnConfig(
+        id: m['id'] as String,
+        type: VpnConfigType.fromString(m['type'] as String? ?? ''),
+        kind: m['kind'] == 'file' ? VpnConfigKind.file : VpnConfigKind.text,
+        content: m['content'] as String?,
+        downloadUrl: m['downloadUrl'] as String?,
+        fileExtension: m['fileExtension'] as String?,
+        country: m['country'] as String? ?? '',
+        flag: m['flag'] as String? ?? '',
+        countryCode: m['countryCode'] as String? ?? '',
+        pingMs: m['pingMs'] as int?,
+        quality: m['quality'] as int? ?? 0,
+        foundAt: DateTime.tryParse(m['foundAt'] as String? ?? ''),
+        verifiedAt: DateTime.tryParse(m['verifiedAt'] as String? ?? ''),
+        builtInSubId: m['builtInSubId'] as int?,
+      );
 }
 
 enum QualityLevel { high, medium, low, unknown }
@@ -72,15 +123,13 @@ enum QualityLevel { high, medium, low, unknown }
 /// promise the list now makes: that what you see here was tested from this
 /// phone. They live in the Telegram channel, which is the right place for them.
 ///
-/// hysteria2, tuic, wireguard and warp are absent because the embedded Xray
-/// core cannot run them. They come back when the core does.
+/// tuic, wireguard and warp are absent because the app's converter does not
+/// build outbounds for them yet.
 const Set<VpnConfigType> tunnelableTypes = {
   VpnConfigType.vless,
   VpnConfigType.vmess,
   VpnConfigType.trojan,
   VpnConfigType.ss,
-  // Listed on request, ahead of the core that can run it: Xray has no
-  // hysteria, so these fail a device test until the sing-box migration.
   VpnConfigType.hysteria,
 };
 
@@ -123,10 +172,14 @@ enum VpnConfigType {
       'trojan' => trojan,
       'ss' => ss,
       'ssr' => ssr,
-      'hysteria' => hysteria,
+      // The bot stores Hysteria2 as `hysteria`, and the API's verified lists
+      // spell it `hysteria2`. Both are the one protocol this app runs; reading
+      // only the first made every `hysteria2` row "unknown", and unknown rows
+      // are dropped before the list is shown.
+      'hysteria' || 'hysteria2' || 'hy2' => hysteria,
       'tuic' => tuic,
       'warp' => warp,
-      'tg_proxy' => tgProxy,
+      'tg_proxy' || 'tgproxy' => tgProxy,
       'openvpn' => openvpn,
       'wireguard' => wireguard,
       'npvt' => npvt,

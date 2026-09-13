@@ -6,6 +6,10 @@ import '../../../configs/presentation/providers/configs_provider.dart';
 import '../../../configs/presentation/providers/local_test_provider.dart';
 import '../../data/candidate_selector.dart';
 import '../../data/tunnel_service.dart';
+import '../../data/network_status.dart';
+import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
+import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
+import '../../domain/local_test.dart';
 import '../../domain/tunnel_snapshot.dart';
 
 final tunnelServiceProvider = Provider<TunnelService>((ref) {
@@ -75,14 +79,26 @@ class TunnelController extends Notifier<TunnelSnapshot> {
   /// Fetch a pool, narrow it to what is worth trying, and hand it to the
   /// tunnel.
   Future<void> connect() async {
-    // Pressing the button on the home screen is the automatic path, so it
-    // clears any earlier hand-picked server rather than silently keeping it.
+    // The automatic path, so it clears any earlier hand-picked server rather
+    // than silently keeping it. The home screen's button and "Try again" go
+    // through [retry], which only comes here when nothing was picked.
     ref.read(chosenServerProvider.notifier).state = null;
     final service = ref.read(tunnelServiceProvider);
     final repository = ref.read(repositoryProvider);
     final country = ref.read(preferredCountryProvider);
 
     state = state.copyWith(phase: TunnelPhase.preparing);
+
+    // Before the server list is fetched: offline, that fetch is what took
+    // two minutes, working through retries and eight Cloudflare edges to
+    // reach an API over a network that was not there.
+    if (!await NetworkStatus.hasInternet()) {
+      state = state.copyWith(
+        phase: TunnelPhase.failed,
+        failure: TunnelFailure.noInternet,
+      );
+      return;
+    }
 
     try {
       // Whatever this device has already proved goes first.
@@ -93,10 +109,27 @@ class TunnelController extends Notifier<TunnelSnapshot> {
       // its own, and reported "none of the 21 servers responded". Two
       // measurements of the same pool minutes apart, and the app believed the
       // one that had not been taken yet.
+      // The user's own subscriptions go first: someone who added a link of
+      // their own wants it used. And they do not depend on Verna's API -- if
+      // the pool cannot be fetched, the user's servers are still worth trying
+      // rather than reporting that the list is unreachable.
+      final mine = _userCandidates(country);
       final proven = _provenCandidates(country);
-      final configs = await _fetchCandidates(repository, country);
+      List<VpnConfig> configs;
+      try {
+        configs = await _fetchCandidates(repository, country);
+      } catch (_) {
+        if (mine.isEmpty) rethrow;
+        configs = const [];
+      }
+      // The verified list is not filtered by source on the server; a list the
+      // user switched off stays off here too.
+      final off = ref.read(builtInSubscriptionsProvider).disabled;
       final searched = const CandidateSelector().select(
-        configs,
+        [
+          for (final c in configs)
+            if (c.builtInSubId == null || !off.contains(c.builtInSubId)) c,
+        ],
         limit: _attempts,
         preferredCountry: country,
       );
@@ -106,7 +139,7 @@ class TunnelController extends Notifier<TunnelSnapshot> {
       // survivable.
       final seen = <String>{};
       final candidates = [
-        for (final config in [...proven, ...searched])
+        for (final config in [...mine, ...proven, ...searched])
           if (seen.add(config.id)) config,
       ];
       await service.connect(candidates);
@@ -118,6 +151,34 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     }
   }
 
+  /// The user's own servers: those this device found working, fastest
+  /// first, then those not tested yet. Tested and broken ones are left out.
+  List<VpnConfig> _userCandidates(String? country) {
+    final mine = ref.read(userConfigsProvider);
+    if (mine.isEmpty) return const [];
+    final results = ref.read(localTestResultsProvider);
+    final working = <({VpnConfig config, int ms})>[];
+    final untested = <VpnConfig>[];
+    for (final config in mine) {
+      if (country != null &&
+          country.isNotEmpty &&
+          config.countryCode != country) {
+        continue;
+      }
+      final result = results[config.id];
+      if (result == null) {
+        untested.add(config);
+      } else if (result.works) {
+        working.add((config: config, ms: result.milliseconds ?? 1 << 30));
+      }
+    }
+    working.sort((a, b) => a.ms.compareTo(b.ms));
+    return [
+      for (final entry in working) entry.config,
+      ...untested,
+    ].take(_attempts).toList();
+  }
+
   /// Configs this device measured as working, fastest first.
   ///
   /// Read from the local test results rather than re-measured: they were taken
@@ -127,7 +188,7 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     final results = ref.read(localTestResultsProvider);
     if (results.isEmpty) return const [];
 
-    final pool = ref.read(configsProvider).textConfigs;
+    final pool = ref.read(vernaTextConfigsProvider);
     final working = <({VpnConfig config, int ms})>[];
     for (final config in pool) {
       final result = results[config.id];
@@ -179,9 +240,36 @@ class TunnelController extends Notifier<TunnelSnapshot> {
   Future<void> connectTo(VpnConfig config) async {
     ref.read(chosenServerProvider.notifier).state = config;
     state = state.copyWith(phase: TunnelPhase.preparing);
-    await ref
-        .read(tunnelServiceProvider)
-        .connect([config], userChose: true);
+    final service = ref.read(tunnelServiceProvider);
+    await service.connect([config], userChose: true);
+
+    // A server picked from the list because it tested green, and then carried
+    // nothing, must not stay green. Measured on a J7 on 2026-09-13: rows
+    // tested minutes earlier failed when chosen -- one had stopped accepting
+    // connections, one was too slow to answer in time, and a family of
+    // Trojan-REALITY servers passed the probe but carried nothing in the
+    // tunnel -- and the list went on inviting a second tap at each of them.
+    // Only a failure that is the server's: no internet or a refused VPN
+    // permission says nothing about it.
+    final after = service.snapshot;
+    if (after.phase == TunnelPhase.failed &&
+        after.failure == TunnelFailure.noneAnswered) {
+      ref
+          .read(localTestResultsProvider.notifier)
+          .record(config.id, const LocalTest.noTraffic());
+    }
+  }
+
+  /// Tries again the way the last attempt was made.
+  ///
+  /// "Try again" and the connect button both called [connect], which clears
+  /// the hand-picked server first: a user whose chosen server failed pressed
+  /// Try again and got an automatic search instead of a second attempt at the
+  /// server they had chosen. The card under the button names the server that
+  /// will be used, so the button now uses that one.
+  Future<void> retry() {
+    final chosen = ref.read(chosenServerProvider);
+    return chosen != null ? connectTo(chosen) : connect();
   }
 
   Future<void> disconnect() => ref.read(tunnelServiceProvider).disconnect();

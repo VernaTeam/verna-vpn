@@ -7,6 +7,8 @@ import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/palette.dart';
 import '../../../settings/data/app_preferences.dart';
 import '../../../stats/data/usage_store.dart';
+import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
+import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
 import '../../data/config_actions.dart';
 
 /// Settings, to the design's layout.
@@ -33,6 +35,14 @@ class SettingsScreen extends ConsumerWidget {
         ref.watch(themeModeProvider).valueOrNull ?? ThemeMode.system;
     final prefs =
         ref.watch(appPreferencesProvider).valueOrNull ?? const AppPreferences();
+    final subCount =
+        ref.watch(userSubscriptionsProvider.select((st) => st.items.length));
+    final builtInCount = ref.watch(builtInSubscriptionsProvider
+        .select((st) => st.items.where((i) => st.isEnabled(i.id)).length));
+    final subSummary = [
+      if (builtInCount > 0) '$builtInCount ${s.subStripVerna}',
+      if (subCount > 0) '$subCount ${s.subStripMine}',
+    ].join('  ·  ');
 
     return Scaffold(
       backgroundColor: c.background,
@@ -88,6 +98,17 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 20),
             _SectionLabel(s.connection),
             const SizedBox(height: 8),
+
+            _Row(
+              title: s.subTitle,
+              subtitle: subSummary.isEmpty ? s.subMineHint : subSummary,
+              leading:
+                  Icon(Icons.playlist_add_rounded, size: 20, color: c.accent),
+              trailing: Icon(Icons.chevron_right_rounded,
+                  size: 20, color: c.textMuted),
+              onTap: () => Navigator.pushNamed(context, '/subscriptions'),
+            ),
+            const SizedBox(height: 10),
 
             _Row(
               title: s.autoConnect,

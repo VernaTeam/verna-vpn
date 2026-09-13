@@ -3,6 +3,7 @@ import 'package:dio/io.dart';
 
 import 'edge_router.dart';
 import '../domain/vpn_config.dart';
+import '../../subscriptions/data/builtin_subscription.dart';
 
 /// Toggle to true to develop without a backend.
 const bool _useMock = false;
@@ -115,6 +116,38 @@ class ConfigApiClient {
         .toList();
   }
 
+  /// The config bot's own subscription lists, offered in the app by default.
+  ///
+  /// Names never arrive: a list is a kind and a number, and its servers carry
+  /// Verna's remark rather than their publisher's.
+  Future<List<BuiltInSubscription>> getSubscriptions({
+    int maxAgeHours = 24,
+  }) async {
+    final res = await _dio.get(
+      '/subscriptions',
+      queryParameters: {'max_age_hours': maxAgeHours},
+    );
+    final data = res.data as Map<String, dynamic>;
+    return [
+      for (final item in (data['subscriptions'] as List? ?? const []))
+        if (item is Map<String, dynamic>) BuiltInSubscription.fromJson(item),
+    ];
+  }
+
+  /// One built-in subscription's servers that recently carried traffic,
+  /// freshest first.
+  Future<ConfigsPage> getSubscriptionConfigs(
+    int id, {
+    int limit = 30,
+    int maxAgeHours = 24,
+  }) async {
+    final res = await _dio.get(
+      '/subscriptions/$id/configs',
+      queryParameters: {'limit': limit, 'max_age_hours': maxAgeHours},
+    );
+    return _parseTextPage(res.data as Map<String, dynamic>);
+  }
+
   Future<ConfigStats> getStats() async {
     if (_useMock) return _mockStats();
     final res = await _dio.get('/configs/stats');
@@ -151,6 +184,7 @@ class ConfigApiClient {
             ? DateTime.tryParse(
                 (m['verified_at'] as String).replaceFirst(' ', 'T'))
             : null,
+        builtInSubId: m['sub'] as int?,
       );
     }).toList();
     return ConfigsPage(total: d['total'] as int, configs: list);

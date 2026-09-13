@@ -77,6 +77,11 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
     ));
   }
 
+  /// Replaces one row's result with what a real connection just found.
+  ///
+  /// A connection is a stronger test than the list's probe, and a newer one.
+  void record(String id, LocalTest result) => state = {...state, id: result};
+
   void clear() {
     state = const {};
     ref.read(localTestProgressProvider.notifier).set(const LocalTestProgress());
@@ -94,32 +99,46 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
 ///     unknown, not condemned.
 final visibleConfigsProvider = Provider<List<VpnConfig>>((ref) {
   final configs = ref.watch(filteredConfigsProvider);
+  // Re-sorted as each batch lands, which moves rows under a finger. The list
+  // screen guards taps against that (see ConfigCard.tapGuard) rather than
+  // freezing the order: frozen, a first run after launch kept the servers
+  // that had just failed at the top for minutes, and the working ones
+  // scattered below them.
   final results = ref.watch(localTestResultsProvider);
   if (results.isEmpty) return configs;
 
+  // Two groups, each ordered the same way: the user's own subscriptions
+  // first, then Verna's pool. Sorting them together would scatter a user's
+  // servers through a list of hundreds and hide the ones they added on purpose.
+  final mineWorking = <VpnConfig>[];
+  final mineUntested = <VpnConfig>[];
   final working = <VpnConfig>[];
   final untested = <VpnConfig>[];
   for (final config in configs) {
+    final mine = config.isFromUserSubscription;
     // Handoff rows are never tested and never hidden: whether Telegram can use
     // a proxy is Telegram's business, and this device cannot find out.
     if (handoffTypes.contains(config.type)) {
-      untested.add(config);
+      (mine ? mineUntested : untested).add(config);
       continue;
     }
     final result = results[config.id];
     if (result == null) {
-      untested.add(config);
+      (mine ? mineUntested : untested).add(config);
     } else if (result.works) {
-      working.add(config);
+      (mine ? mineWorking : working).add(config);
     }
     // Tested and broken: deliberately dropped.
   }
 
-  working.sort((a, b) {
+  int byLatency(VpnConfig a, VpnConfig b) {
     final left = results[a.id]?.milliseconds ?? 1 << 30;
     final right = results[b.id]?.milliseconds ?? 1 << 30;
     return left.compareTo(right);
-  });
+  }
 
-  return [...working, ...untested];
+  mineWorking.sort(byLatency);
+  working.sort(byLatency);
+
+  return [...mineWorking, ...mineUntested, ...working, ...untested];
 });

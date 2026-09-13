@@ -95,13 +95,13 @@ class _VpnHomeScreenState extends ConsumerState<VpnHomeScreen>
                             // safeguard.
                             onTap: () => snapshot.isConnected || snapshot.isBusy
                                 ? controller.disconnect()
-                                : controller.connect(),
+                                : controller.retry(),
                           ),
                           if (snapshot.phase == TunnelPhase.failed)
                             _FailureCard(
                               snapshot: snapshot,
                               strings: s,
-                              onRetry: controller.connect,
+                              onRetry: controller.retry,
                             ),
                         ],
                       ),
@@ -683,6 +683,24 @@ class _ServerCard extends ConsumerWidget {
                 ],
               ),
             ),
+            // A hand-picked server stays picked -- the button and "Try
+            // again" both use it -- so there has to be a way back to letting
+            // the app choose.
+            if (chosen != null && !connected && !snapshot.isBusy)
+              Semantics(
+                button: true,
+                label: s.autoSelect,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () =>
+                      ref.read(chosenServerProvider.notifier).state = null,
+                  child: Padding(
+                    padding: const EdgeInsets.all(6),
+                    child: Icon(Icons.close_rounded,
+                        size: 18, color: c.textMuted),
+                  ),
+                ),
+              ),
             const SizedBox(width: 10),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
@@ -934,6 +952,7 @@ String statusCode(TunnelSnapshot s) => switch (s.phase) {
 
 String failureTitle(S s, TunnelFailure failure) => switch (failure) {
       TunnelFailure.permissionDenied => s.permissionDenied,
+      TunnelFailure.noInternet => s.noInternet,
       TunnelFailure.fetchFailed => s.fetchFailed,
       TunnelFailure.noCandidates => s.noCandidates,
       _ => s.failTitle,
@@ -946,6 +965,7 @@ String failureDetail(TunnelSnapshot s) {
   }
   return switch (s.failure) {
     TunnelFailure.permissionDenied => 'VPN_PERMISSION_DENIED',
+    TunnelFailure.noInternet => 'NO_NETWORK · Wi-Fi and mobile data are off',
     TunnelFailure.fetchFailed => 'SERVER_LIST_UNREACHABLE',
     TunnelFailure.noCandidates => 'NO_USABLE_CONFIGS',
     TunnelFailure.unstable => 'TUNNEL_UNSTABLE',

@@ -23,13 +23,27 @@ import 'qr_sheet.dart';
 /// fast, and the whole row connects. Copy and QR still exist, one tap further
 /// in, because they are for the rarer job of moving a config to another app.
 class ConfigCard extends ConsumerStatefulWidget {
-  const ConfigCard({super.key, required this.config, this.onTap});
+  const ConfigCard({
+    super.key,
+    required this.config,
+    this.onTap,
+    this.tapGuard,
+  });
 
   final VpnConfig config;
 
   /// Opens the detail screen. Kept for the overflow menu; the row itself
   /// connects, because that is what someone tapping a server means.
   final VoidCallback? onTap;
+
+  /// Asked before a tap connects; false swallows the tap.
+  ///
+  /// The list re-sorts while servers are being tested, and a row can move
+  /// between the moment it is seen and the moment it is tapped. On a J7 on
+  /// 2026-09-13 a tap aimed at "United Kingdom, Shadowsocks, 217 ms" connected
+  /// to a German Trojan server that had just moved into that slot, and the
+  /// failure read as the chosen server not working.
+  final bool Function()? tapGuard;
 
   @override
   ConsumerState<ConfigCard> createState() => _ConfigCardState();
@@ -81,8 +95,13 @@ class _ConfigCardState extends ConsumerState<ConfigCard> {
                         ),
                       ),
                       const SizedBox(height: 2),
+                      // The protocol, and nothing about where the server
+                      // came from: a subscription's name is usually its
+                      // publisher's, and this list does not advertise them.
                       Text(
                         cfg.type.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           color: c.textMuted,
                           fontSize: 12,
@@ -124,8 +143,10 @@ class _ConfigCardState extends ConsumerState<ConfigCard> {
   /// An MTProto proxy is not something this app can run: it tunnels Telegram
   /// alone, inside Telegram. Handing the tg:// link over is the whole of the
   /// integration, and it is genuinely one tap.
-  Future<void> _primaryAction() =>
-      _isHandoff ? _openInTelegram() : _connectHere();
+  Future<void> _primaryAction() async {
+    if (widget.tapGuard?.call() == false) return;
+    return _isHandoff ? _openInTelegram() : _connectHere();
+  }
 
   void _showActions(S s) {
     final c = context.verna;

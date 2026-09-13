@@ -61,6 +61,7 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "hasNotificationPermission" -> result.success(hasNotifications())
+                    "hasInternet" -> result.success(hasInternet())
                     "requestNotificationPermission" -> {
                         requestNotifications()
                         result.success(null)
@@ -103,6 +104,28 @@ class MainActivity : FlutterActivity() {
     }
 
     // ── network transport ────────────────────────────────────────────────────
+
+    /**
+     * Whether the phone has any network that can reach the internet at all.
+     *
+     * Any network, not the active one: while the app's own tunnel is up, the
+     * active network *is* the tunnel. And not a validated one: Google's
+     * connectivity check is blocked in Iran, so Android marks working networks
+     * "no internet" there -- trusting that flag would refuse to connect on the
+     * very networks this app exists for. This only answers "is Wi-Fi or mobile
+     * data there", which is the question a two-minute search was answering the
+     * slow way.
+     */
+    @Suppress("DEPRECATION") // allNetworks: fine for a one-off read.
+    private fun hasInternet(): Boolean {
+        val manager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return true
+        return manager.allNetworks.any { network ->
+            val capabilities = manager.getNetworkCapabilities(network) ?: return@any false
+            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        }
+    }
 
     private fun startWatchingNetwork() {
         if (networkCallback != null) return

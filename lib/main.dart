@@ -14,6 +14,7 @@ import 'features/configs/presentation/screens/settings_screen.dart';
 import 'features/about/presentation/screens/about_screen.dart';
 import 'features/diagnostics/presentation/diagnostics_screen.dart';
 import 'features/settings/presentation/screens/plan_screen.dart';
+import 'features/subscriptions/presentation/subscriptions_screen.dart';
 import 'features/tunnel/presentation/screens/country_picker_screen.dart';
 import 'features/tunnel/presentation/screens/vpn_home_screen.dart';
 
@@ -84,6 +85,7 @@ class VernaApp extends ConsumerWidget {
         '/countries': (_) => const CountryPickerScreen(),
         '/diagnostics': (_) => const DiagnosticsScreen(),
         '/plan': (_) => const PlanScreen(),
+        '/subscriptions': (_) => const SubscriptionsScreen(),
         '/settings': (_) => const SettingsScreen(),
         '/about': (_) => const AboutScreen(),
       },

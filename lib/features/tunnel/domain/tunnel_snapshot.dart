@@ -33,6 +33,10 @@ enum TunnelFailure {
   /// The user declined Android's VPN consent dialog.
   permissionDenied,
 
+  /// The phone has no Wi-Fi and no mobile data, so there is nothing to
+  /// search. Said at once rather than discovered after a full search.
+  noInternet,
+
   /// The server list could not be fetched at all.
   fetchFailed,
 

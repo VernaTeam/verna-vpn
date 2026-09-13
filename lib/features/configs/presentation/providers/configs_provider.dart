@@ -3,6 +3,8 @@ import '../../../diagnostics/data/app_log.dart';
 import '../../data/config_api_client.dart';
 import '../../data/config_repository.dart';
 import '../../domain/vpn_config.dart';
+import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
+import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
 
 final apiClientProvider = Provider<ConfigApiClient>((_) => ConfigApiClient());
 
@@ -226,15 +228,52 @@ class ConfigsNotifier extends Notifier<ConfigsState> {
 final configsProvider =
     NotifierProvider<ConfigsNotifier, ConfigsState>(ConfigsNotifier.new);
 
+/// Verna's servers: the pool sample and the built-in subscriptions, once
+/// each, without the rows of a list the user switched off.
+///
+/// The pool sample is not filtered by source on the server, so a switched-off
+/// list's servers can arrive through it too; the row's subscription id is what
+/// keeps them out.
+final vernaTextConfigsProvider = Provider<List<VpnConfig>>((ref) {
+  final pool = ref.watch(configsProvider.select((s) => s.textConfigs));
+  final builtIn = ref.watch(builtInConfigsProvider);
+  final off = ref.watch(builtInSubscriptionsProvider.select((s) => s.disabled));
+  final seen = <String>{};
+  return [
+    for (final c in [...pool, ...builtIn])
+      if (!(c.builtInSubId != null && off.contains(c.builtInSubId)) &&
+          seen.add(c.id))
+        c,
+  ];
+});
+
 final filteredConfigsProvider = Provider<List<VpnConfig>>((ref) {
   final state = ref.watch(configsProvider);
   final filter = ref.watch(filterProvider);
+  final text = ref.watch(vernaTextConfigsProvider);
 
   List<VpnConfig> base = switch (filter.tab) {
-    TabFilter.text => state.textConfigs,
+    TabFilter.text => text,
     TabFilter.file => state.fileConfigs,
-    TabFilter.all => state.allConfigs,
+    TabFilter.all => [...text, ...state.fileConfigs]
+      ..sort((a, b) => b.quality.compareTo(a.quality)),
   };
+
+  // The user's own subscriptions, ahead of Verna's pool. Put here rather than
+  // in configsProvider so that everything downstream -- search, the protocol
+  // and country filters, the on-device test -- treats them like any other row
+  // without knowing where they came from. A link that is in both places is
+  // shown once, as the user's.
+  if (filter.tab != TabFilter.file) {
+    final mine = ref.watch(userConfigsProvider);
+    if (mine.isNotEmpty) {
+      final mineContent = {for (final c in mine) c.content};
+      base = [
+        ...mine,
+        ...base.where((c) => !mineContent.contains(c.content)),
+      ];
+    }
+  }
 
   // Only what the app can act on. See `usableTypes`.
   base = base.where((c) => usableTypes.contains(c.type)).toList();
@@ -263,7 +302,11 @@ final availableCountriesProvider =
   final state = ref.watch(configsProvider);
   final seen = <String>{};
   final result = <({String code, String name, String flag})>[];
-  for (final c in [...state.textConfigs, ...state.fileConfigs]) {
+  // The pool first, so a country present in both keeps the pool's proper
+  // name; the user's rows only add countries the pool does not have.
+  final mine = ref.watch(userConfigsProvider);
+  final text = ref.watch(vernaTextConfigsProvider);
+  for (final c in [...text, ...state.fileConfigs, ...mine]) {
     if (c.countryCode.isNotEmpty && seen.add(c.countryCode)) {
       result.add((code: c.countryCode, name: c.country, flag: c.flag));
     }
