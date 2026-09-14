@@ -130,6 +130,16 @@ class S {
   String get subDefaultName => _t('ساب', 'Subscription');
   String get subStripVerna => _t('ساب ورنا', 'Verna subscriptions');
   String get subStripMine => _t('ساب شما', 'yours');
+  String get shareResults =>
+      _t('ارسال ناشناس نتیجه‌ی تست‌ها', 'Share test results anonymously');
+  String get shareResultsHint => _t(
+        'اینکه کدام سرورهای ورنا روی این گوشی کار کردند، بدون IP و بدون '
+            'مشخصات دستگاه، تا سرورهای خراب برای همه عقب بروند. ساب‌های خودتان '
+            'هرگز فرستاده نمی‌شوند.',
+        "Which of Verna's servers worked on this phone — no IP, nothing that "
+            'identifies the device — so broken ones sink for everyone. Your own '
+            'subscriptions are never sent.',
+      );
   String get statData => _t('داده', 'Data');
   String get securelyConnected =>
       _t('اتصال شما امن است', 'You are securely connected');

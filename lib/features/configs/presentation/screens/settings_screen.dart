@@ -122,6 +122,17 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 10),
             _Row(
+              title: s.shareResults,
+              subtitle: s.shareResultsHint,
+              trailing: _Switch(
+                value: prefs.shareResults,
+                onChanged: (value) => ref
+                    .read(appPreferencesProvider.notifier)
+                    .setShareResults(value),
+              ),
+            ),
+            const SizedBox(height: 10),
+            _Row(
               title: s.killSwitch,
               subtitle: s.killSwitchHint,
               trailing: _SoonBadge(label: s.notBuiltYet),

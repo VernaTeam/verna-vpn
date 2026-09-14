@@ -148,6 +148,12 @@ class ConfigApiClient {
     return _parseTextPage(res.data as Map<String, dynamic>);
   }
 
+  /// Measurements from this phone. Every report carries its own uid, so
+  /// sending a batch twice after a timeout stores it once.
+  Future<void> postReports(List<Map<String, dynamic>> reports) async {
+    await _dio.post('/reports', data: {'reports': reports});
+  }
+
   Future<ConfigStats> getStats() async {
     if (_useMock) return _mockStats();
     final res = await _dio.get('/configs/stats');
@@ -185,6 +191,7 @@ class ConfigApiClient {
                 (m['verified_at'] as String).replaceFirst(' ', 'T'))
             : null,
         builtInSubId: m['sub'] as int?,
+        concurrency: (m['concurrency'] as num?)?.toDouble(),
       );
     }).toList();
     return ConfigsPage(total: d['total'] as int, configs: list);

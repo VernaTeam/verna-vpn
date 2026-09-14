@@ -26,6 +26,9 @@ dependencies:
   flutter_singbox_client: ^1.1.0
   # StreamQueue, for reading a SOCKS5 handshake off a raw socket step by step.
   async: ^2.11.0
+  # sha256 for the credential hash in measurement reports (already in the
+  # lock as a transitive dependency; declared because the app uses it now).
+  crypto: ^3.0.0
 dev_dependencies:
   flutter_test:
     sdk: flutter

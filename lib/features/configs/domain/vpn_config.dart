@@ -30,6 +30,13 @@ class VpnConfig {
   /// list the user switched off.
   final int? builtInSubId;
 
+  /// Share of concurrent requests this server carried in the bot's test --
+  /// ten fired at once through one tunnel -- or null when never measured.
+  ///
+  /// A whole-device tunnel opens many flows at once, and some servers answer
+  /// one request and drop the rest: a Trojan family measured 1/1 but 14/30.
+  final double? concurrency;
+
   const VpnConfig({
     required this.id,
     required this.type,
@@ -46,6 +53,7 @@ class VpnConfig {
     this.verifiedAt,
     this.subscriptionName,
     this.builtInSubId,
+    this.concurrency,
   });
 
   /// Whether the latency figure came from a real tunnel rather than a TCP
@@ -57,6 +65,11 @@ class VpnConfig {
   bool get isFile => kind == VpnConfigKind.file;
 
   bool get isFromUserSubscription => subscriptionName != null;
+
+  /// Measured dropping concurrent flows. Never true for an unmeasured server:
+  /// no data is not a failure.
+  bool get weakUnderLoad =>
+      concurrency != null && concurrency! < minConcurrency;
 
   /// Absolute download URL. The API returns a relative path; callers that need
   /// a full URL (QR, download) should use this with the configured base.
@@ -93,6 +106,7 @@ class VpnConfig {
         'foundAt': foundAt?.toIso8601String(),
         'verifiedAt': verifiedAt?.toIso8601String(),
         'builtInSubId': builtInSubId,
+        'concurrency': concurrency,
       };
 
   factory VpnConfig.fromJson(Map<String, dynamic> m) => VpnConfig(
@@ -110,10 +124,16 @@ class VpnConfig {
         foundAt: DateTime.tryParse(m['foundAt'] as String? ?? ''),
         verifiedAt: DateTime.tryParse(m['verifiedAt'] as String? ?? ''),
         builtInSubId: m['builtInSubId'] as int?,
+        concurrency: (m['concurrency'] as num?)?.toDouble(),
       );
 }
 
 enum QualityLevel { high, medium, low, unknown }
+
+/// Below this share of concurrent requests a server is tried after everything
+/// else. Agreed with the config bot, which uses the same line; on its first
+/// live sample it set aside 1 config in 98.
+const double minConcurrency = 0.8;
 
 /// What the app can do something useful with.
 ///

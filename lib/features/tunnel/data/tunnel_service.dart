@@ -8,9 +8,11 @@ import 'package:flutter_singbox_client/flutter_singbox_client.dart';
 
 import '../../configs/domain/vpn_config.dart';
 import '../../diagnostics/data/app_log.dart';
+import '../../reports/data/measurement_report.dart';
 import '../domain/local_test.dart';
 import '../domain/tunnel_snapshot.dart';
 import 'candidate_selector.dart';
+import 'active_session_store.dart';
 import 'known_good_store.dart';
 import 'network_status.dart';
 import 'network_watcher.dart';
@@ -77,6 +79,22 @@ class TunnelService {
   List<VpnConfig> _lastCandidates = const [];
   bool _lastUserChose = false;
   bool _recovering = false;
+  bool _adopting = false;
+
+  /// Told the outcome of every real connection attempt, and of servers that
+  /// refused one while others accepted -- for the anonymous reports. Set by
+  /// the provider; the service itself knows nothing about sending them.
+  void Function(
+    VpnConfig config,
+    ReportStage stage,
+    ReportOutcome outcome,
+    int? ms,
+    String? asn,
+  )? onTunnelResult;
+
+  /// The network (ASN) the phone was last measured on outside the tunnel,
+  /// for labelling the list's own test results.
+  String? lastAsn;
 
   /// Latest urltest results, keyed by outbound tag. Only delays above zero:
   /// the core reports 0 for an outbound it could not reach.
@@ -274,12 +292,28 @@ class TunnelService {
     // The tunnel can end without this app asking: the notification's stop
     // button, Android reclaiming the service, the core failing. Nothing else
     // watches for that, so a screen saying Connected could outlive the tunnel.
+    // Not after disconnect(): it sets _cancelled before stopping, and without
+    // that check every tap on the orb was logged as a stop from outside (seen
+    // on the A54, 2026-09-14).
     if (state == ServiceState.stopped &&
         previous != ServiceState.stopped &&
-        _snapshot.phase == TunnelPhase.connected) {
+        _snapshot.phase == TunnelPhase.connected &&
+        !_cancelled) {
       _log.info('Tunnel ended', detail: 'stopped outside the app');
       _connectedAt = null;
+      unawaited(ActiveSessionStore.clear());
       _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+    }
+
+    // And the other way: a running service can surface late, after this
+    // screen already decided nothing was up (see restore). Adopting it here
+    // is what keeps the screen from saying OFF over a live tunnel. Not while
+    // the device test runs -- its proxy-mode core starts the service too.
+    if (state == ServiceState.started &&
+        previous != ServiceState.started &&
+        _snapshot.phase == TunnelPhase.idle &&
+        !_testing) {
+      unawaited(_adopt());
     }
   }
 
@@ -358,6 +392,12 @@ class TunnelService {
 
   // -- public API ----------------------------------------------------------
 
+  /// True when no VPN tunnel carries this app's own traffic: nothing is
+  /// running, or only the device test's proxy-mode core, which routes
+  /// nothing. Reports are sent only then, so the address the API sees is
+  /// the phone's own network and not a VPN server's exit.
+  bool get noTunnel => _state == ServiceState.stopped || _testing;
+
   Future<bool> requestPermission() async {
     await _ensureInitialized();
     return _client.requestVPNPermission();
@@ -372,24 +412,164 @@ class TunnelService {
   /// restored, because a stored one could describe a tunnel that has since
   /// dropped.
   Future<void> restore() async {
+    ServiceState state;
     try {
       await _ensureInitialized();
-      final state = await _client.getServiceState();
-      if (!state.isRunning) return;
+      state = await _client.getServiceState();
     } catch (_) {
       return;
     }
+    if (state.isRunning) {
+      _state = ServiceState.started;
+      await _adopt();
+      return;
+    }
 
-    _state = ServiceState.started;
-    _connectedAt ??= DateTime.now();
-    _emit(const TunnelSnapshot(phase: TunnelPhase.connected));
+    // "Stopped" is not the answer yet when Android shows a VPN.
+    //
+    // On detaching from the engine the plugin disposes its manager, and the
+    // next engine re-attaches to a still-running service asynchronously
+    // (initialize -> tryConnectToRunningService). For that moment the core
+    // reads "stopped" over a live tunnel, and this asked in exactly that
+    // window. Measured on a J7 on 2026-09-14 after "Close all" during a
+    // connect: the app said OFF, Android showed a VPN, and the phone's traffic
+    // was going into a candidate tunnel that had never been verified.
+    final vpn = await NetworkStatus.vpnActive();
+    if (vpn != true) {
+      await ActiveSessionStore.clear();
+      return;
+    }
+    _log.info('Restore: waiting for the core',
+        detail: 'Android shows a VPN up');
+    final deadline = DateTime.now().add(const Duration(seconds: 6));
+    while (
+        _state != ServiceState.started && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    if (_state == ServiceState.started) {
+      // _onServiceState may have adopted it already; _adopt guards against a
+      // second run.
+      await _adopt();
+      return;
+    }
 
+    // The core never answered, so this app can neither see nor steer that
+    // tunnel. Stopping it is the only honest move left: the alternative is a
+    // screen saying OFF over traffic going somewhere the user did not choose.
+    _log.warn('Restore: core never answered',
+        detail: 'stopping the VPN it left behind');
+    await ActiveSessionStore.clear();
+    try {
+      await _client.disconnect();
+    } catch (_) {
+      // Already gone.
+    }
+    _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+  }
+
+  /// Takes over a running tunnel this Dart state did not start.
+  ///
+  /// A tunnel that was verified before -- a session was saved -- is shown as
+  /// it was. One that was never verified is a candidate left behind by a
+  /// connect attempt that was killed half-way; if it carries nothing it is
+  /// stopped, rather than left holding the phone's traffic.
+  Future<void> _adopt() async {
+    if (_adopting || _snapshot.phase == TunnelPhase.connected) return;
+    _adopting = true;
+    // A live tunnel is this app's again. A disconnect earlier in this run
+    // left _cancelled set, which would read as "the user stopped it".
+    _cancelled = false;
+    try {
+      final saved = await ActiveSessionStore.load();
+      _connectedAt ??= saved?.connectedAt ?? DateTime.now();
+      _emit(TunnelSnapshot(
+        phase: TunnelPhase.connected,
+        active: saved?.config,
+        pingMs: saved?.pingMs,
+        exitIp: saved?.exitIp,
+        exitCountryCode: saved?.exitCountryCode,
+        duration: _elapsed(),
+      ));
+      _log.info('Tunnel restored',
+          detail: saved == null
+              ? 'no saved session'
+              : '${saved.config.type.label} ${saved.config.countryCode}');
+
+      final egress = await _readEgress(timeout: const Duration(seconds: 10));
+      if (egress != null) {
+        _emit(_snapshot.copyWith(
+          exitIp: egress.ip,
+          exitCountryCode: egress.country,
+        ));
+        return;
+      }
+      if (saved == null) {
+        _log.warn('Restored tunnel carried no traffic',
+            detail: 'it was never verified; stopped');
+        _connectedAt = null;
+        await _stop();
+        _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+      } else {
+        _log.warn('Restored tunnel: no answer yet',
+            detail: 'it carried traffic before; checking again in '
+                '${_restoreRecheck.inSeconds} s');
+        unawaited(_recheckRestored(saved));
+      }
+    } finally {
+      _adopting = false;
+    }
+  }
+
+  /// How long a restored tunnel that did not answer gets before it is asked
+  /// again.
+  static const Duration _restoreRecheck = Duration(seconds: 15);
+
+  /// Called when a restored tunnel failed its second check, with the session
+  /// it was restored from. Set by the provider, which holds the candidate
+  /// lists this service lost with the previous Flutter engine.
+  Future<void> Function(ActiveSession saved)? onRestoredTunnelDead;
+
+  /// Second look at a restored tunnel that did not answer.
+  ///
+  /// Keeping such a tunnel unconditionally meant the screen could say
+  /// Connected indefinitely over nothing. Seen on the A54 on 2026-09-14: after
+  /// Close all on a tunnel up for thirteen minutes, both egress lookups timed
+  /// out, the tunnel was kept, and download stayed at zero until the user
+  /// disconnected. One silent check is not enough to drop a tunnel that was
+  /// verified -- a lookup can time out on a working one -- two are.
+  Future<void> _recheckRestored(ActiveSession saved) async {
+    final session = _connectedAt;
+    bool stillThisTunnel() =>
+        identical(session, _connectedAt) &&
+        _snapshot.phase == TunnelPhase.connected &&
+        !_cancelled;
+
+    await Future<void>.delayed(_restoreRecheck);
+    if (!stillThisTunnel()) return;
     final egress = await _readEgress(timeout: const Duration(seconds: 10));
-    if (egress == null) return;
-    _emit(_snapshot.copyWith(
-      exitIp: egress.ip,
-      exitCountryCode: egress.country,
-    ));
+    if (!stillThisTunnel()) return;
+
+    if (egress != null) {
+      _log.good('Restored tunnel answered',
+          detail: '${egress.ip} (${egress.country ?? '?'})');
+      _emit(_snapshot.copyWith(
+        exitIp: egress.ip,
+        exitCountryCode: egress.country,
+      ));
+      return;
+    }
+
+    _log.warn('Restored tunnel carried nothing',
+        detail: saved.userChose
+            ? 'twice; connecting to the chosen server again'
+            : 'twice; searching again');
+    // Idle before stopping, so the service-state listener does not take this
+    // for a stop from outside the app.
+    _connectedAt = null;
+    _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+    await ActiveSessionStore.clear();
+    await _stop();
+    await onRestoredTunnelDead?.call(saved);
   }
 
   /// Brings up the first candidate that demonstrably carries traffic.
@@ -418,6 +598,7 @@ class TunnelService {
       _log.info('Connecting to chosen server',
           detail: '${chosen.type.label} ${chosen.countryCode} #${chosen.id}');
     }
+    unawaited(ActiveSessionStore.clear());
     _emit(const TunnelSnapshot(phase: TunnelPhase.preparing));
 
     try {
@@ -462,16 +643,22 @@ class TunnelService {
 
       // The device's own exit, so a change of country means something -- and
       // the network it is on, so the right memories are consulted.
+      // Another app's VPN, if one is up: this app's own is not yet started, so
+      // the sweep below would go through it and blame servers for its path.
+      final foreignVpn = _state == ServiceState.stopped &&
+          await NetworkStatus.vpnActive() == true;
       final before = await _readEgress(timeout: const Duration(seconds: 6));
       final network = before?.network ?? 'unknown';
+      if (before?.network != null) lastAsn = before!.network;
 
       // Servers this phone has already connected through on this network, in
       // front of everything. A connection used to begin by rediscovering the
       // world: fetch the pool, sweep it, probe it in batches, then try
       // candidates one by one. Ninety seconds, for a question that had been
       // answered ten minutes earlier and thrown away when the process ended.
-      final remembered =
-          userChose ? const <KnownGood>[] : await KnownGoodStore.forNetwork(network);
+      final remembered = userChose
+          ? const <KnownGood>[]
+          : await KnownGoodStore.forNetwork(network);
       final rememberedConfigs = [for (final e in remembered) e.toConfig()];
 
       // A plain TCP connect to each server, all at once. The core's own test
@@ -484,6 +671,17 @@ class TunnelService {
       ));
       final reachable = await _reachable(usable, fallbackToAll: false);
       if (_cancelled) return;
+
+      // Servers that refused a connection while others accepted one: the
+      // network was working, so the refusal is the server's to report.
+      if (reachable.isNotEmpty && !foreignVpn) {
+        final accepted = {for (final c in reachable) c.id};
+        for (final config in usable) {
+          if (accepted.contains(config.id)) continue;
+          onTunnelResult?.call(config, ReportStage.probe,
+              ReportOutcome.unreachable, null, before?.network);
+        }
+      }
 
       // Nothing on the list accepts a connection from this network, and
       // nothing has worked here before. Every tunnel would fail for the same
@@ -499,10 +697,19 @@ class TunnelService {
         return;
       }
 
-      // The remembered ones are not put through the reachability sweep or the
-      // probe: they have carried real traffic from this phone, which is a
-      // stronger claim than either test makes, and the egress check below is
-      // still what decides.
+      // Remembered servers are compared, not trusted blindly.
+      //
+      // They used to be tried first, one by one, with no probe: fast, and it
+      // meant automatic mode went back to the same server every time for as
+      // long as that server kept working, however much better the rest of the
+      // list had become since. Meysam asked (2026-09-14) that the fastest win.
+      //
+      // So they lead the shortlist and are probed in the same batch as the
+      // best of everything else -- the phone's own proven servers come first
+      // in [candidates] -- and whichever answers fastest is tried first. It
+      // costs one probe, a few seconds, over the old shortcut. They are still
+      // exempt from the reachability sweep: they have carried real traffic
+      // here, and the probe asks them the same question more precisely.
       final seenIds = <String>{};
       final shortlist = [
         for (final config in [...rememberedConfigs, ...reachable])
@@ -513,57 +720,40 @@ class TunnelService {
         attempt: 0,
         total: shortlist.length,
       ));
-
-      // Two passes, cheapest first.
-      //
-      // First, what has already carried traffic from this phone on this
-      // network -- no probe, because a real connection already answered the
-      // question the probe would ask. Then the rest a batch at a time: probe
-      // twenty, try whatever answered, and only probe the next twenty if
-      // none of those carried traffic. Ranking the whole list first spent
-      // forty of fifty-six seconds on a J7 finding servers after the first
-      // one had already been found.
-      //
-      // When the probe finds nobody answering, only [_blindAttempts] are
-      // tried anyway. The queue used to fall back to the whole shortlist: on
-      // RighTel that was forty tunnels at fourteen seconds each, ten minutes
-      // to report a failure the probe had already reported.
-      final remainder = [
-        for (final config in shortlist)
-          if (!rememberedConfigs.any((r) => r.id == config.id)) config,
-      ];
-
-      var attempt = 0;
-      int total =
-          rememberedConfigs.length + min<int>(remainder.length, _blindAttempts);
-
-      for (final config in rememberedConfigs) {
-        if (_cancelled) return;
-        attempt++;
-        if (await _tryCandidate(config, 0, before, network, attempt, total)) {
-          return;
-        }
+      if (rememberedConfigs.isNotEmpty) {
+        _log.info('Comparing servers',
+            detail: '${rememberedConfigs.length} remembered against '
+                '${max(0, min(shortlist.length, _batchSize) - rememberedConfigs.length)} others');
       }
+
+      // A batch at a time: probe twenty, try whatever answered, fastest
+      // first, and only probe the next twenty if none of those carried
+      // traffic. When the probe finds nobody answering, only
+      // [_blindAttempts] are tried anyway -- on RighTel the old fallback to
+      // the whole shortlist took ten minutes to report a failure the probe
+      // had already reported.
+      var attempt = 0;
+      int total = min<int>(shortlist.length, _blindAttempts);
 
       // A one-member group reports nothing at all -- measured on an A54,
       // "1 outbounds -> 0 tested, 0 answered" -- so a single candidate is not
       // probed; it is simply tried.
-      var anyAnswered = remainder.length <= 1;
-      if (remainder.length == 1) {
+      var anyAnswered = shortlist.length <= 1;
+      if (shortlist.length == 1) {
         attempt++;
         total = attempt;
         if (await _tryCandidate(
-            remainder.single, 0, before, network, attempt, total)) {
+            shortlist.single, 0, before, network, attempt, total)) {
           return;
         }
       }
 
       for (var start = 0;
-          remainder.length > 1 && start < remainder.length;
+          shortlist.length > 1 && start < shortlist.length;
           start += _batchSize) {
         if (_cancelled) return;
         final batch =
-            remainder.sublist(start, min(start + _batchSize, remainder.length));
+            shortlist.sublist(start, min(start + _batchSize, shortlist.length));
         final ranked = await _rank(batch, retryOnlyIfSilent: true);
         if (_cancelled) return;
         if (ranked.isEmpty) continue;
@@ -581,9 +771,9 @@ class TunnelService {
       }
 
       // Nobody answered a single probe. The probe can be wrong, so a few are
-      // tried anyway -- a few, not the whole list.
+      // tried anyway -- remembered ones first, since they lead the list.
       if (!anyAnswered) {
-        final blind = remainder.take(_blindAttempts).toList();
+        final blind = shortlist.take(_blindAttempts).toList();
         total = attempt + blind.length;
         for (final config in blind) {
           if (_cancelled) return;
@@ -641,8 +831,7 @@ class TunnelService {
     // different fixes: names that will not resolve inside the tunnel, a route
     // that swallows connections, a TLS error.
     final failures = <String>[];
-    final after =
-        await _readEgress(timeout: _verifyBudget, failures: failures);
+    final after = await _readEgress(timeout: _verifyBudget, failures: failures);
     final verdict = _verifyEgress(before, after, config);
     if (verdict != null || after == null) {
       // A hand-picked server gets one more question before it is given up
@@ -660,6 +849,8 @@ class TunnelService {
       // A remembered server that has stopped working must not keep being
       // tried first, or the shortcut becomes the slow path.
       await KnownGoodStore.forget(config.id, network);
+      onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.noTraffic,
+          null, network == 'unknown' ? null : network);
       await _stop();
       return false;
     }
@@ -668,8 +859,18 @@ class TunnelService {
     final pingMs = latency ?? (probeMs > 0 ? probeMs : null);
 
     await KnownGoodStore.remember(config, network, milliseconds: pingMs);
+    onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.alive,
+        pingMs, network == 'unknown' ? null : network);
 
     _connectedAt = DateTime.now();
+    unawaited(ActiveSessionStore.save(ActiveSession(
+      config: config,
+      connectedAt: _connectedAt!,
+      pingMs: pingMs,
+      exitIp: after.ip,
+      exitCountryCode: after.country,
+      userChose: _lastUserChose,
+    )));
     _emit(TunnelSnapshot(
       phase: TunnelPhase.connected,
       active: config,
@@ -732,6 +933,7 @@ class TunnelService {
     _lastCandidates = const [];
     await _stop();
     _connectedAt = null;
+    await ActiveSessionStore.clear();
     _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
   }
 
@@ -761,6 +963,11 @@ class TunnelService {
 
     final results = <String, LocalTest>{};
     await _ensureInitialized();
+
+    // Which network these results are about, for the reports. Read while no
+    // tunnel is up, and cheap next to the run itself.
+    final here = await _readEgress(timeout: const Duration(seconds: 6));
+    if (here?.network != null) lastAsn = here!.network;
 
     final reachable = (await _reachable(subject)).toSet();
     _log.info('Reachability filter',
@@ -931,7 +1138,9 @@ class TunnelService {
 
     // No country from either reading -- fall back to the address, which is
     // weak but better than accepting anything.
-    if (before?.ip != null && after.ip == before!.ip) return 'address unchanged';
+    if (before?.ip != null && after.ip == before!.ip) {
+      return 'address unchanged';
+    }
     return null;
   }
 
@@ -999,7 +1208,8 @@ class TunnelService {
   }
 
   String _label(VpnConfig config) {
-    final name = config.country.isNotEmpty ? config.country : config.countryCode;
+    final name =
+        config.country.isNotEmpty ? config.country : config.countryCode;
     if (name.isEmpty) return 'Verna';
     final code = config.countryCode;
     return code.length == 2 ? '$name ${_flag(code)}' : name;

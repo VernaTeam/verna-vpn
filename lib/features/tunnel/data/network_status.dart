@@ -16,6 +16,46 @@ class NetworkStatus {
   static const MethodChannel _channel =
       MethodChannel('ir.vernaservice.vpn/permissions');
 
+  /// `wifi`, `cellular` or `unknown`: the network under the tunnel, never
+  /// the tunnel itself.
+  static Future<String> transport() async {
+    try {
+      final value = await _channel.invokeMethod<String>('transport');
+      return value == 'wifi' || value == 'cellular' ? value! : 'unknown';
+    } on PlatformException {
+      return 'unknown';
+    } on MissingPluginException {
+      return 'unknown';
+    }
+  }
+
+  /// MCC+MNC of the mobile network ("43235"), or null. Meant for mobile
+  /// data only; see MeasurementReport.mobileOperator.
+  static Future<String?> mobileOperator() async {
+    try {
+      final value = await _channel.invokeMethod<String>('mobileOperator');
+      return value != null && RegExp(r'^[0-9]{5,6}$').hasMatch(value)
+          ? value
+          : null;
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  /// Whether Android shows any VPN up, or null when it cannot say.
+  /// Diagnostics only: it cannot tell this app's tunnel from another's.
+  static Future<bool?> vpnActive() async {
+    try {
+      return await _channel.invokeMethod<bool>('vpnActive');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   static Future<bool> hasInternet() async {
     try {
       return await _channel.invokeMethod<bool>('hasInternet') ?? true;

@@ -91,7 +91,13 @@ class CandidateSelector {
 
     // CDN rows are not banned -- for some types they are most of the pool --
     // they are simply tried last.
-    return [...direct, ...cdn].take(limit).toList();
+    // Servers the bot measured dropping concurrent flows go after everything
+    // else. Kept, not removed: a list of nothing but them still beats none.
+    final ordered = [...direct, ...cdn];
+    return [
+      ...ordered.where((c) => !c.weakUnderLoad),
+      ...ordered.where((c) => c.weakUnderLoad),
+    ].take(limit).toList();
   }
 
   bool _isRunnable(VpnConfig config) {

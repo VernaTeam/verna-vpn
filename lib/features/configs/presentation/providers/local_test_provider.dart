@@ -1,6 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../diagnostics/data/app_log.dart';
+import '../../../reports/data/measurement_report.dart';
+import '../../../reports/data/report_queue.dart';
+import '../../../tunnel/data/network_status.dart';
 import '../../../tunnel/domain/local_test.dart';
 import '../../../tunnel/presentation/providers/tunnel_provider.dart';
 import '../../domain/vpn_config.dart';
@@ -52,7 +57,14 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
         .take(_limit)
         .toList();
     if (subject.isEmpty) return;
-    AppLog.instance.info('Test run requested', detail: '${subject.length} rows');
+    AppLog.instance
+        .info('Test run requested', detail: '${subject.length} rows');
+
+    // Asked before the run: testCandidates refuses while this app's tunnel is
+    // up, so any VPN now is another app's, and every probe goes through it.
+    // Found on an A54 with HyperTunnel connected (2026-09-14): the results
+    // are still shown, but they describe that VPN's path, not this network.
+    final foreignVpn = await NetworkStatus.vpnActive() == true;
 
     progress.set(LocalTestProgress(running: true, total: subject.length));
     final results = await service.testCandidates(
@@ -70,6 +82,31 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
     // Merge rather than replace: a row tested in an earlier run keeps its
     // result until it is tested again.
     state = {...state, ...results};
+
+    // Shared as reports when the user allows it (see ReportSink): which of
+    // Verna's servers answered from this phone, on this network.
+    if (foreignVpn) {
+      AppLog.instance.info('Reports skipped',
+          detail: 'another VPN was up; results describe its path');
+    } else {
+      unawaited(ref.read(reportSinkProvider).submit(
+        results: [
+          for (final config in subject)
+            if (results[config.id] case final LocalTest test)
+              (
+                config: config,
+                outcome: test.works
+                    ? ReportOutcome.alive
+                    : test.reachable
+                        ? ReportOutcome.noTraffic
+                        : ReportOutcome.unreachable,
+                ms: test.milliseconds,
+              ),
+        ],
+        stage: ReportStage.probe,
+        asn: service.lastAsn,
+      ));
+    }
     progress.set(LocalTestProgress(
       done: subject.length,
       total: subject.length,
@@ -132,6 +169,9 @@ final visibleConfigsProvider = Provider<List<VpnConfig>>((ref) {
   }
 
   int byLatency(VpnConfig a, VpnConfig b) {
+    // Servers that drop concurrent flows sort after the rest, whatever
+    // their single-request latency says.
+    if (a.weakUnderLoad != b.weakUnderLoad) return a.weakUnderLoad ? 1 : -1;
     final left = results[a.id]?.milliseconds ?? 1 << 30;
     final right = results[b.id]?.milliseconds ?? 1 << 30;
     return left.compareTo(right);

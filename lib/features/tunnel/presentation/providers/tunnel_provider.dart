@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../configs/data/config_repository.dart';
@@ -7,6 +9,7 @@ import '../../../configs/presentation/providers/local_test_provider.dart';
 import '../../data/candidate_selector.dart';
 import '../../data/tunnel_service.dart';
 import '../../data/network_status.dart';
+import '../../../reports/data/report_queue.dart';
 import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
 import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
 import '../../domain/local_test.dart';
@@ -14,6 +17,14 @@ import '../../domain/tunnel_snapshot.dart';
 
 final tunnelServiceProvider = Provider<TunnelService>((ref) {
   final service = TunnelService();
+  // A real connection is the strongest evidence the app has about a server,
+  // so its outcome is reported like the list's own test (see ReportSink).
+  service.onTunnelResult =
+      (config, stage, outcome, ms, asn) => ref.read(reportSinkProvider).submit(
+            results: [(config: config, outcome: outcome, ms: ms)],
+            stage: stage,
+            asn: asn,
+          );
   ref.onDispose(service.dispose);
   return service;
 });
@@ -60,9 +71,19 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     final service = ref.watch(tunnelServiceProvider);
     final sub = service.updates.listen((snapshot) => state = snapshot);
     ref.onDispose(sub.cancel);
+    // A restored tunnel that stopped carrying traffic is replaced the way it
+    // was made: the hand-picked server again, or a fresh automatic search.
+    service.onRestoredTunnelDead =
+        (saved) => saved.userChose ? connectTo(saved.config) : connect();
+    ref.onDispose(() => service.onRestoredTunnelDead = null);
     // The tunnel can already be up from a previous run of this screen -- or of
     // this process. Ask, rather than assuming a fresh start means disconnected.
-    Future.microtask(service.restore);
+    Future.microtask(() async {
+      await service.restore();
+      // Reports queued in an earlier session go out now if no tunnel is
+      // up -- on the phone's own network (see ReportSink.flush).
+      await ref.read(reportSinkProvider).flush();
+    });
     return service.snapshot;
   }
 
@@ -143,6 +164,7 @@ class TunnelController extends Notifier<TunnelSnapshot> {
           if (seen.add(config.id)) config,
       ];
       await service.connect(candidates);
+      unawaited(ref.read(reportSinkProvider).flush());
     } catch (e) {
       state = state.copyWith(
         phase: TunnelPhase.failed,
@@ -200,7 +222,15 @@ class TunnelController extends Notifier<TunnelSnapshot> {
       }
       working.add((config: config, ms: result.milliseconds ?? 1 << 30));
     }
-    working.sort((a, b) => a.ms.compareTo(b.ms));
+    working.sort((a, b) {
+      // Measured dropping concurrent flows: after the rest, however fast.
+      final weak = a.config.weakUnderLoad == b.config.weakUnderLoad
+          ? 0
+          : a.config.weakUnderLoad
+              ? 1
+              : -1;
+      return weak != 0 ? weak : a.ms.compareTo(b.ms);
+    });
     return [for (final entry in working.take(_attempts)) entry.config];
   }
 
@@ -242,6 +272,7 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     state = state.copyWith(phase: TunnelPhase.preparing);
     final service = ref.read(tunnelServiceProvider);
     await service.connect([config], userChose: true);
+    unawaited(ref.read(reportSinkProvider).flush());
 
     // A server picked from the list because it tested green, and then carried
     // nothing, must not stay green. Measured on a J7 on 2026-09-13: rows
@@ -272,5 +303,9 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     return chosen != null ? connectTo(chosen) : connect();
   }
 
-  Future<void> disconnect() => ref.read(tunnelServiceProvider).disconnect();
+  Future<void> disconnect() async {
+    await ref.read(tunnelServiceProvider).disconnect();
+    // Reports gathered while connected waited for this.
+    unawaited(ref.read(reportSinkProvider).flush());
+  }
 }
