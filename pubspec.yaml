@@ -1,12 +1,22 @@
 name: verna_vpn
 description: Verna VPN - Free VPN Configs
 publish_to: 'none'
-# Build 4002, not 1: the beta shipped four APKs built with `--split-per-abi`,
-# which rewrites versionCode as abi * 1000 + build (armeabi 1001, arm64 2001,
-# x86_64 4001). Android only upgrades to a HIGHER code, so the first official
-# release builds each ABI separately *without* that flag and they all carry
-# 4002. The version name stays 1.0.0.
-version: 1.0.0+4002
+# Build 3002, and the reason is worth reading before touching it.
+#
+# `--split-per-abi` rewrites versionCode as abi * 1000 + build, so this number
+# produces armeabi 4002, arm64 5002 and x86_64 7002 -- each one above the
+# beta's 1001 / 2001 / 4001, which is what lets every beta install upgrade in
+# place. Android only ever upgrades to a HIGHER code.
+#
+# Building each ABI *without* the flag (so they would all share one code) was
+# tried and rejected: the tunnel core arrives as an AAR carrying all three
+# ABIs, `--target-platform` does not filter those, and each file came out at
+# 80 MB instead of 32. On the connections this app is for, that matters more
+# than a tidy versionCode.
+#
+# The universal APK is built with `--build-number=7003` so it sits above every
+# split and installs over anything. The version name stays 1.0.0.
+version: 1.0.0+3002
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
