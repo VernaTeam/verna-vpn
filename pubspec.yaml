@@ -1,7 +1,12 @@
 name: verna_vpn
 description: Verna VPN - Free VPN Configs
 publish_to: 'none'
-version: 1.0.0+1
+# Build 4002, not 1: the beta shipped four APKs built with `--split-per-abi`,
+# which rewrites versionCode as abi * 1000 + build (armeabi 1001, arm64 2001,
+# x86_64 4001). Android only upgrades to a HIGHER code, so the first official
+# release builds each ABI separately *without* that flag and they all carry
+# 4002. The version name stays 1.0.0.
+version: 1.0.0+4002
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -51,6 +56,12 @@ flutter:
   assets:
     - assets/images/
     - assets/seed_configs.json
+    # Country outlines for the map on the connect screen: Natural Earth 110m
+    # (public domain) quantised to int16 degrees, 45 KB. Bundled rather than
+    # fetched -- the map has to draw on a network that blocks half the
+    # internet, and a world that arrives late is worse than one that is
+    # simply there.
+    - assets/geo/world_110m.bin
 
   # Bundled, not fetched at runtime. This app runs on connections that block or
   # throttle Google, and a font that arrives late -- or never -- would leave

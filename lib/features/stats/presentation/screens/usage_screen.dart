@@ -36,10 +36,13 @@ class UsageScreen extends ConsumerWidget {
           children: [
             Text(
               s.usage,
+              // `.h1`: 23px, 700, -.025em -- the same heading as every other
+              // screen, so the tabs read as one app.
               style: TextStyle(
                 color: c.textPrimary,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
+                fontSize: 23,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.575,
               ),
             ),
             const SizedBox(height: 16),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// The colours the app is painted in, taken from the design handoff.
+/// The colours the app is painted in, taken from the Aurora design handoff.
 ///
 /// A [ThemeExtension] rather than a bag of constants. It began as constants and
 /// the app could only be dark: every screen named `Palette.background`
@@ -12,9 +12,10 @@ import 'package:flutter/material.dart';
 /// is the darkest surface in dark mode and the lightest in light mode. A field
 /// called `navy` would have to lie in one of them.
 ///
-/// Values are the design's own tokens, transcribed rather than approximated --
-/// the accent is its blue, and green is reserved for "this is working", which
-/// is a different statement from "this is the brand".
+/// Values are the design's own tokens, transcribed rather than approximated.
+/// Where the design writes `rgba(255,255,255,.07)` the alpha is kept rather
+/// than flattened against the card underneath, because the same token sits on
+/// three different surfaces and flattening it would need three constants.
 @immutable
 class VernaColors extends ThemeExtension<VernaColors> {
   const VernaColors({
@@ -24,6 +25,7 @@ class VernaColors extends ThemeExtension<VernaColors> {
     required this.chip,
     required this.border,
     required this.borderFaint,
+    required this.borderStrong,
     required this.track,
     required this.textPrimary,
     required this.textSecondary,
@@ -31,12 +33,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
     required this.textFaint,
     required this.mono,
     required this.accent,
+    required this.accentBlue,
+    required this.accentSoft,
     required this.onAccent,
     required this.ok,
     required this.warn,
     required this.danger,
     required this.okSurface,
     required this.okBorder,
+    required this.warnSurface,
     required this.dangerSurface,
     required this.dangerBorder,
     required this.selectedSurface,
@@ -44,6 +49,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
     required this.dotOff,
     required this.navInactive,
     required this.glow,
+    required this.mapSea,
+    required this.mapLand,
+    required this.mapHighlight,
+    required this.mapStroke,
+    required this.auraOffInner,
+    required this.auraOffMid,
+    required this.auraOffOuter,
+    required this.auraOffInk,
+    required this.shadow,
   });
 
   /// The page itself.
@@ -64,6 +78,10 @@ class VernaColors extends ThemeExtension<VernaColors> {
   /// A quieter border, for dividers inside a card that already has one.
   final Color borderFaint;
 
+  /// The design's `lineHi`: a border meant to be seen, on a selected row or a
+  /// control that is currently accepting input.
+  final Color borderStrong;
+
   /// The unfilled part of a progress ring or bar.
   final Color track;
 
@@ -75,15 +93,26 @@ class VernaColors extends ThemeExtension<VernaColors> {
   /// Monospaced values -- addresses, codes, throughput.
   final Color mono;
 
-  /// The brand colour, and the colour of anything interactive.
+  /// The brand colour, and the colour of anything interactive. Cyan in Aurora.
   final Color accent;
+
+  /// The far end of the accent gradient. Never used alone for text: it is the
+  /// blue that cyan runs into across a filled surface.
+  final Color accentBlue;
+
+  /// A wash of [accent], for the bubble behind an active nav item and for
+  /// chips that are accented rather than neutral.
+  final Color accentSoft;
 
   /// Text drawn on top of [accent].
   final Color onAccent;
 
-  /// Connected, working, go. Deliberately not [accent]: "this is our app" and
-  /// "your tunnel is carrying traffic" are different claims and the design
-  /// keeps them apart.
+  /// Connected, working, go.
+  ///
+  /// In Aurora this *is* the accent cyan, unlike the previous palette which
+  /// kept them apart. The design makes cyan mean protected everywhere -- the
+  /// aura, the ring, the map highlight and the pin -- so a separate green
+  /// would be a second word for the same thing.
   final Color ok;
 
   final Color warn;
@@ -91,6 +120,7 @@ class VernaColors extends ThemeExtension<VernaColors> {
 
   final Color okSurface;
   final Color okBorder;
+  final Color warnSurface;
   final Color dangerSurface;
   final Color dangerBorder;
 
@@ -107,63 +137,124 @@ class VernaColors extends ThemeExtension<VernaColors> {
   /// The wash behind the connect ring and on the splash.
   final Color glow;
 
+  /// The map's water, its countries, the country being connected through, and
+  /// the hairline between them.
+  final Color mapSea;
+  final Color mapLand;
+  final Color mapHighlight;
+  final Color mapStroke;
+
+  /// The three stacked half-ellipses behind the power button while the tunnel
+  /// is down, and the ink that sits on them.
+  ///
+  /// Only the off state is in the palette: the design gives connecting,
+  /// connected and failed the same colours in both themes, because those are
+  /// state colours rather than surface colours. They live in the aura widget.
+  final Color auraOffInner;
+  final Color auraOffMid;
+  final Color auraOffOuter;
+  final Color auraOffInk;
+
+  /// The card shadow, already carrying its own alpha.
+  final Color shadow;
+
   static const VernaColors dark = VernaColors(
-    background: Color(0xFF0B0D13),
-    surface: Color(0xFF11141D),
-    surfaceSunken: Color(0xFF0F121A),
-    chip: Color(0xFF1A1F2C),
-    border: Color(0xFF1F2432),
-    borderFaint: Color(0xFF171B26),
-    track: Color(0xFF1A1F2C),
-    textPrimary: Color(0xFFE8ECF4),
-    textSecondary: Color(0xFF8A95AB),
-    textMuted: Color(0xFF6B768C),
-    textFaint: Color(0xFF5D6779),
+    background: Color(0xFF0A1020),
+    surface: Color(0xFF131B2E),
+    surfaceSunken: Color(0xFF0F1626),
+    chip: Color(0xFF1A2338),
+    border: Color(0x12FFFFFF),
+    borderFaint: Color(0x0BFFFFFF),
+    borderStrong: Color(0x29FFFFFF),
+    track: Color(0x12FFFFFF),
+    textPrimary: Color(0xFFEAF1FB),
+    textSecondary: Color(0xFF9AA8C2),
+    textMuted: Color(0xFF8B98B2),
+    textFaint: Color(0xFF6B7791),
     mono: Color(0xFFC3CDDD),
-    accent: Color(0xFF5B8CFF),
-    onAccent: Color(0xFF08090D),
-    ok: Color(0xFF3DDC97),
-    warn: Color(0xFFFFB84A),
-    danger: Color(0xFFFF6B7D),
-    okSurface: Color(0xFF0F2419),
-    okBorder: Color(0xFF1F4A38),
-    dangerSurface: Color(0xFF170F14),
-    dangerBorder: Color(0xFF3A2230),
-    selectedSurface: Color(0xFF141A2B),
-    selectedBorder: Color(0xFF2F4A86),
-    dotOff: Color(0xFF2B3142),
-    navInactive: Color(0xFF4B5466),
-    glow: Color(0xFF16203A),
+    accent: Color(0xFF35E0E8),
+    accentBlue: Color(0xFF2B7FFF),
+    accentSoft: Color(0x2135E0E8),
+    onAccent: Color(0xFFFFFFFF),
+    ok: Color(0xFF35E0E8),
+    warn: Color(0xFFFFC061),
+    danger: Color(0xFFFF6B8A),
+    okSurface: Color(0x2135E0E8),
+    okBorder: Color(0x5935E0E8),
+    warnSurface: Color(0x24FFC061),
+    dangerSurface: Color(0x21FF6B8A),
+    dangerBorder: Color(0x59FF6B8A),
+    selectedSurface: Color(0x1A35E0E8),
+    selectedBorder: Color(0x8C35E0E8),
+    dotOff: Color(0xFF2B3654),
+    navInactive: Color(0xFF7B87A3),
+    glow: Color(0x802B7FFF),
+    mapSea: Color(0xFF101828),
+    mapLand: Color(0xFF2B3A55),
+    mapHighlight: Color(0xFF46DAE2),
+    mapStroke: Color(0x14FFFFFF),
+    auraOffInner: Color(0xFF182034),
+    auraOffMid: Color(0xFF202A43),
+    auraOffOuter: Color(0xFF2A3654),
+    auraOffInk: Color(0x6BFFFFFF),
+    shadow: Color(0xF2000000),
   );
 
   static const VernaColors light = VernaColors(
-    background: Color(0xFFFFFFFF),
-    surface: Color(0xFFF7F8FC),
-    surfaceSunken: Color(0xFFF1F3F9),
-    chip: Color(0xFFE7EBF5),
-    border: Color(0xFFE2E6F0),
-    borderFaint: Color(0xFFEAEDF5),
-    track: Color(0xFFE4E8F1),
-    textPrimary: Color(0xFF0F1420),
-    textSecondary: Color(0xFF5A6478),
-    textMuted: Color(0xFF7C8598),
-    textFaint: Color(0xFF98A1B3),
+    background: Color(0xFFF7F9FD),
+    surface: Color(0xFFFFFFFF),
+    surfaceSunken: Color(0xFFF2F5FB),
+    chip: Color(0xFFE8EDF7),
+    border: Color(0x17101A30),
+    borderFaint: Color(0x0F101A30),
+    borderStrong: Color(0x33101A30),
+    track: Color(0xFFE6EAF3),
+    textPrimary: Color(0xFF0D1526),
+    textSecondary: Color(0xFF4F5A70),
+    textMuted: Color(0xFF5E6A80),
+    textFaint: Color(0xFF7C8699),
     mono: Color(0xFF3A4256),
-    accent: Color(0xFF2F5FE0),
+    accent: Color(0xFF0E8F9C),
+    accentBlue: Color(0xFF1F5FDB),
+    accentSoft: Color(0x1A0E8F9C),
     onAccent: Color(0xFFFFFFFF),
-    ok: Color(0xFF0F9D63),
-    warn: Color(0xFFB5730C),
-    danger: Color(0xFFD24558),
-    okSurface: Color(0xFFE7F7EF),
-    okBorder: Color(0xFFBDE6D2),
-    dangerSurface: Color(0xFFFDEEF0),
-    dangerBorder: Color(0xFFF3CCD3),
-    selectedSurface: Color(0xFFEAF0FF),
-    selectedBorder: Color(0xFFA9C0FF),
+    ok: Color(0xFF0E8F9C),
+    warn: Color(0xFFA9700C),
+    danger: Color(0xFFCF3F60),
+    okSurface: Color(0x1A0E8F9C),
+    okBorder: Color(0x4D0E8F9C),
+    warnSurface: Color(0x1FA9700C),
+    dangerSurface: Color(0x1ACF3F60),
+    dangerBorder: Color(0x4DCF3F60),
+    selectedSurface: Color(0x140E8F9C),
+    selectedBorder: Color(0x800E8F9C),
     dotOff: Color(0xFFC9D0E0),
-    navInactive: Color(0xFFA3ABBD),
-    glow: Color(0xFFE9EFFE),
+    navInactive: Color(0xFF7C8699),
+    glow: Color(0x661F5FDB),
+    mapSea: Color(0xFFE4EAF4),
+    mapLand: Color(0xFFC2CCDD),
+    mapHighlight: Color(0xFF17A9B4),
+    mapStroke: Color(0x1F101A30),
+    auraOffInner: Color(0xFFDDE5F2),
+    auraOffMid: Color(0xFFE8EEF8),
+    auraOffOuter: Color(0xFFF2F5FB),
+    auraOffInk: Color(0x73101A30),
+    shadow: Color(0x66142038),
   );
+
+  /// Cyan into blue, at the design's 140°.
+  ///
+  /// A getter rather than a constant because the two ends differ by theme, and
+  /// a gradient built from the wrong half is the kind of thing that only shows
+  /// up in a screenshot someone sends six weeks later.
+  LinearGradient get accentGradient => LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          accent,
+          accentBlue,
+        ],
+      );
 
   @override
   VernaColors copyWith({
@@ -173,6 +264,7 @@ class VernaColors extends ThemeExtension<VernaColors> {
     Color? chip,
     Color? border,
     Color? borderFaint,
+    Color? borderStrong,
     Color? track,
     Color? textPrimary,
     Color? textSecondary,
@@ -180,12 +272,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
     Color? textFaint,
     Color? mono,
     Color? accent,
+    Color? accentBlue,
+    Color? accentSoft,
     Color? onAccent,
     Color? ok,
     Color? warn,
     Color? danger,
     Color? okSurface,
     Color? okBorder,
+    Color? warnSurface,
     Color? dangerSurface,
     Color? dangerBorder,
     Color? selectedSurface,
@@ -193,6 +288,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
     Color? dotOff,
     Color? navInactive,
     Color? glow,
+    Color? mapSea,
+    Color? mapLand,
+    Color? mapHighlight,
+    Color? mapStroke,
+    Color? auraOffInner,
+    Color? auraOffMid,
+    Color? auraOffOuter,
+    Color? auraOffInk,
+    Color? shadow,
   }) =>
       VernaColors(
         background: background ?? this.background,
@@ -201,6 +305,7 @@ class VernaColors extends ThemeExtension<VernaColors> {
         chip: chip ?? this.chip,
         border: border ?? this.border,
         borderFaint: borderFaint ?? this.borderFaint,
+        borderStrong: borderStrong ?? this.borderStrong,
         track: track ?? this.track,
         textPrimary: textPrimary ?? this.textPrimary,
         textSecondary: textSecondary ?? this.textSecondary,
@@ -208,12 +313,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
         textFaint: textFaint ?? this.textFaint,
         mono: mono ?? this.mono,
         accent: accent ?? this.accent,
+        accentBlue: accentBlue ?? this.accentBlue,
+        accentSoft: accentSoft ?? this.accentSoft,
         onAccent: onAccent ?? this.onAccent,
         ok: ok ?? this.ok,
         warn: warn ?? this.warn,
         danger: danger ?? this.danger,
         okSurface: okSurface ?? this.okSurface,
         okBorder: okBorder ?? this.okBorder,
+        warnSurface: warnSurface ?? this.warnSurface,
         dangerSurface: dangerSurface ?? this.dangerSurface,
         dangerBorder: dangerBorder ?? this.dangerBorder,
         selectedSurface: selectedSurface ?? this.selectedSurface,
@@ -221,6 +329,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
         dotOff: dotOff ?? this.dotOff,
         navInactive: navInactive ?? this.navInactive,
         glow: glow ?? this.glow,
+        mapSea: mapSea ?? this.mapSea,
+        mapLand: mapLand ?? this.mapLand,
+        mapHighlight: mapHighlight ?? this.mapHighlight,
+        mapStroke: mapStroke ?? this.mapStroke,
+        auraOffInner: auraOffInner ?? this.auraOffInner,
+        auraOffMid: auraOffMid ?? this.auraOffMid,
+        auraOffOuter: auraOffOuter ?? this.auraOffOuter,
+        auraOffInk: auraOffInk ?? this.auraOffInk,
+        shadow: shadow ?? this.shadow,
       );
 
   @override
@@ -234,6 +351,7 @@ class VernaColors extends ThemeExtension<VernaColors> {
       chip: mix(chip, other.chip),
       border: mix(border, other.border),
       borderFaint: mix(borderFaint, other.borderFaint),
+      borderStrong: mix(borderStrong, other.borderStrong),
       track: mix(track, other.track),
       textPrimary: mix(textPrimary, other.textPrimary),
       textSecondary: mix(textSecondary, other.textSecondary),
@@ -241,12 +359,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
       textFaint: mix(textFaint, other.textFaint),
       mono: mix(mono, other.mono),
       accent: mix(accent, other.accent),
+      accentBlue: mix(accentBlue, other.accentBlue),
+      accentSoft: mix(accentSoft, other.accentSoft),
       onAccent: mix(onAccent, other.onAccent),
       ok: mix(ok, other.ok),
       warn: mix(warn, other.warn),
       danger: mix(danger, other.danger),
       okSurface: mix(okSurface, other.okSurface),
       okBorder: mix(okBorder, other.okBorder),
+      warnSurface: mix(warnSurface, other.warnSurface),
       dangerSurface: mix(dangerSurface, other.dangerSurface),
       dangerBorder: mix(dangerBorder, other.dangerBorder),
       selectedSurface: mix(selectedSurface, other.selectedSurface),
@@ -254,6 +375,15 @@ class VernaColors extends ThemeExtension<VernaColors> {
       dotOff: mix(dotOff, other.dotOff),
       navInactive: mix(navInactive, other.navInactive),
       glow: mix(glow, other.glow),
+      mapSea: mix(mapSea, other.mapSea),
+      mapLand: mix(mapLand, other.mapLand),
+      mapHighlight: mix(mapHighlight, other.mapHighlight),
+      mapStroke: mix(mapStroke, other.mapStroke),
+      auraOffInner: mix(auraOffInner, other.auraOffInner),
+      auraOffMid: mix(auraOffMid, other.auraOffMid),
+      auraOffOuter: mix(auraOffOuter, other.auraOffOuter),
+      auraOffInk: mix(auraOffInk, other.auraOffInk),
+      shadow: mix(shadow, other.shadow),
     );
   }
 }
@@ -269,10 +399,16 @@ extension VernaTheme on BuildContext {
 
 /// The two type families the design uses.
 ///
-/// Vazirmatn carries Persian and Latin prose equally well, which matters for an
-/// app that ships in both. JetBrains Mono is reserved for values that are read
-/// as data rather than language -- timers, addresses, throughput, status codes
-/// -- where a fixed advance stops digits from dancing as they change.
+/// The Aurora handoff asks for Manrope on Latin UI text. This app does not
+/// ship it: Vazirmatn sets Latin and Persian equally well, a third family
+/// would add roughly 300 KB to an APK that is sideloaded over bad connections,
+/// and in a Persian sentence containing a Latin word the two faces would meet
+/// inside one line. Weight and size carry the hierarchy instead, which is what
+/// the design uses them for anyway.
+///
+/// JetBrains Mono is kept exactly as the design uses it: values read as data
+/// rather than language -- timers, addresses, throughput, status codes --
+/// where a fixed advance stops digits from dancing as they change.
 class VernaType {
   const VernaType._();
 

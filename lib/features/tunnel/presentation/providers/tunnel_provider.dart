@@ -7,6 +7,7 @@ import '../../../configs/domain/vpn_config.dart';
 import '../../../configs/presentation/providers/configs_provider.dart';
 import '../../../configs/presentation/providers/local_test_provider.dart';
 import '../../data/candidate_selector.dart';
+import '../../data/preferred_country_store.dart';
 import '../../data/tunnel_service.dart';
 import '../../data/network_status.dart';
 import '../../../reports/data/report_queue.dart';
@@ -79,6 +80,13 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     // The tunnel can already be up from a previous run of this screen -- or of
     // this process. Ask, rather than assuming a fresh start means disconnected.
     Future.microtask(() async {
+      // The country the user picked last time, before anything tries to
+      // connect: a restored preference that arrives after the first connect
+      // would be a preference the app ignored once and then obeyed.
+      final saved = await PreferredCountryStore.load();
+      if (saved != null && ref.read(preferredCountryProvider) == null) {
+        ref.read(preferredCountryProvider.notifier).state = saved;
+      }
       await service.restore();
       // Reports queued in an earlier session go out now if no tunnel is
       // up -- on the phone's own network (see ReportSink.flush).
@@ -163,7 +171,11 @@ class TunnelController extends Notifier<TunnelSnapshot> {
         for (final config in [...mine, ...proven, ...searched])
           if (seen.add(config.id)) config,
       ];
-      await service.connect(candidates);
+      // The country goes to the service too, not just into the candidate
+      // list: the service consults its own memory of what worked on this
+      // network first, and that memory has no idea what the user just asked
+      // for unless it is told.
+      await service.connect(candidates, preferredCountry: country);
       unawaited(ref.read(reportSinkProvider).flush());
     } catch (e) {
       state = state.copyWith(

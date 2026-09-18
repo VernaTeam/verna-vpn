@@ -57,10 +57,25 @@ class VernaApp extends ConsumerWidget {
       ],
       // Force text direction to match language
       builder: (context, child) {
-        return Directionality(
-          textDirection:
-              lang == AppLang.en ? TextDirection.ltr : TextDirection.rtl,
-          child: child!,
+        final media = MediaQuery.of(context);
+        return MediaQuery(
+          // The phone's font scale is respected up to a point and then held.
+          // Measured on an A54 set to 1.15: "Selected location · Fastest"
+          // truncated and the nav label became "Subscriptio…". Past about 1.2
+          // this layout stops being the design and starts being a pile of
+          // ellipses, which helps nobody -- least of all someone who enlarged
+          // the text because they need it.
+          data: media.copyWith(
+            textScaler: media.textScaler.clamp(
+              minScaleFactor: 0.85,
+              maxScaleFactor: 1.2,
+            ),
+          ),
+          child: Directionality(
+            textDirection:
+                lang == AppLang.en ? TextDirection.ltr : TextDirection.rtl,
+            child: child!,
+          ),
         );
       },
       initialRoute: '/',

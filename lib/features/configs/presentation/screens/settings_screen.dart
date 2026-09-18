@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../../../app_shell.dart';
 import '../../../../core/l10n/app_strings.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/palette.dart';
@@ -52,10 +53,12 @@ class SettingsScreen extends ConsumerWidget {
           children: [
             Text(
               s.settings,
+              // `.h1`: 23px, 700, -.025em.
               style: TextStyle(
                 color: c.textPrimary,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
+                fontSize: 23,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.575,
               ),
             ),
             const SizedBox(height: 18),
@@ -106,7 +109,11 @@ class SettingsScreen extends ConsumerWidget {
                   Icon(Icons.playlist_add_rounded, size: 20, color: c.accent),
               trailing: Icon(Icons.chevron_right_rounded,
                   size: 20, color: c.textMuted),
-              onTap: () => Navigator.pushNamed(context, '/subscriptions'),
+              // The tab, not a pushed copy: subscriptions have their own place
+              // in the bar now, and pushing a second one on top of it would
+              // leave the user with a back arrow to a screen they can also
+              // reach by tapping the tab underneath it.
+              onTap: () => ref.read(shellTabProvider.notifier).select(3),
             ),
             const SizedBox(height: 10),
 
@@ -360,7 +367,7 @@ class _Segmented extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: i == index ? c.accent : null,
+                  gradient: i == index ? c.accentGradient : null,
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
@@ -391,25 +398,29 @@ class _Switch extends StatelessWidget {
     final c = context.verna;
     return GestureDetector(
       onTap: () => onChanged(!value),
+      // `.sw`: 48 x 28 with a 22 knob, the accent gradient when on.
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        width: 44,
-        height: 26,
-        padding: const EdgeInsets.all(3),
+        duration: const Duration(milliseconds: 220),
+        width: 48,
+        height: 28,
+        padding: const EdgeInsets.all(2),
         decoration: BoxDecoration(
-          color: value ? c.selectedSurface : c.surfaceSunken,
+          color: value ? null : c.surfaceSunken,
+          gradient: value ? c.accentGradient : null,
           borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: value ? c.selectedBorder : c.border),
+          border: Border.all(color: value ? Colors.transparent : c.border),
         ),
         child: AnimatedAlign(
-          duration: const Duration(milliseconds: 200),
+          duration: const Duration(milliseconds: 220),
           curve: Curves.easeOut,
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+          alignment: value
+              ? AlignmentDirectional.centerEnd
+              : AlignmentDirectional.centerStart,
           child: Container(
-            width: 20,
-            height: 20,
+            width: 22,
+            height: 22,
             decoration: BoxDecoration(
-              color: value ? c.accent : c.navInactive,
+              color: value ? Colors.white : c.textFaint,
               shape: BoxShape.circle,
             ),
           ),

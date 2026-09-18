@@ -33,7 +33,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   /// The step being shown, indexing [_steps].
   int _step = 0;
 
-  late final AnimationController _pulse;
+  late final AnimationController _float;
   final List<Timer> _timers = [];
 
   static const List<({String label, double progress, int atMs})> _steps = [
@@ -53,9 +53,12 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
   @override
   void initState() {
     super.initState();
-    _pulse = AnimationController(
+    // The design floats the mark 6 px and back over 3.4 s. Slow on purpose:
+    // it is the only thing moving, and a boot screen that bounces reads as a
+    // loading spinner pretending to be a brand.
+    _float = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 2),
+      duration: const Duration(milliseconds: 3400),
     )..repeat(reverse: true);
 
     for (var i = 1; i < _steps.length; i++) {
@@ -74,7 +77,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
     for (final timer in _timers) {
       timer.cancel();
     }
-    _pulse.dispose();
+    _float.dispose();
     super.dispose();
   }
 
@@ -100,49 +103,36 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // The halo pulses, the tile does not: a logo that breathes
-                  // reads as decoration, a ring around a steady logo reads as
-                  // work happening.
-                  SizedBox(
-                    width: 96,
-                    height: 96,
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        AnimatedBuilder(
-                          animation: _pulse,
-                          builder: (context, _) {
-                            final t = Curves.easeInOut.transform(_pulse.value);
-                            return Opacity(
-                              opacity: 0.25 + 0.45 * t,
-                              child: Transform.scale(
-                                scale: 1 + 0.08 * t,
-                                child: Container(
-                                  width: 96,
-                                  height: 96,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(30),
-                                    border: Border.all(color: c.accent),
-                                  ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                        Container(
-                          width: 66,
-                          height: 66,
-                          decoration: BoxDecoration(
-                            color: c.accent,
-                            borderRadius: BorderRadius.circular(22),
+                  // The design's floating mark: 104 at radius 30, rising 6 px
+                  // and settling over 3.4 s, over a glow in the accent.
+                  AnimatedBuilder(
+                    animation: _float,
+                    builder: (context, child) => Transform.translate(
+                      offset: Offset(
+                        0,
+                        -6 * Curves.easeInOut.transform(_float.value),
+                      ),
+                      child: child,
+                    ),
+                    child: Container(
+                      width: 104,
+                      height: 104,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(30),
+                        boxShadow: [
+                          BoxShadow(
+                            color: c.glow,
+                            blurRadius: 54,
+                            spreadRadius: -20,
+                            offset: const Offset(0, 26),
                           ),
-                          child: Icon(
-                            Icons.verified_user_rounded,
-                            size: 34,
-                            color: c.onAccent,
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
+                      clipBehavior: Clip.antiAlias,
+                      child: Image.asset(
+                        'assets/images/icon.png',
+                        fit: BoxFit.cover,
+                      ),
                     ),
                   ),
                   const SizedBox(height: 22),
@@ -170,24 +160,27 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
                     ),
                   ),
                   const SizedBox(height: 14),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(2),
-                    child: SizedBox(
-                      width: 132,
-                      height: 3,
-                      child: Stack(
-                        children: [
-                          Container(color: c.track),
-                          AnimatedFractionallySizedBox(
-                            duration: const Duration(milliseconds: 450),
-                            curve: Curves.easeOut,
-                            widthFactor: step.progress,
-                            heightFactor: 1,
-                            child: Container(color: c.accent),
+                  // Three dots, the current one stretched to 26 px: the
+                  // design's own progress indicator. It says "three things,
+                  // this is the second" rather than inventing a percentage
+                  // nobody measured.
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      for (var i = 0; i < _steps.length; i++) ...[
+                        if (i > 0) const SizedBox(width: 7),
+                        AnimatedContainer(
+                          duration: const Duration(milliseconds: 350),
+                          curve: Curves.easeOut,
+                          width: i == _step ? 26 : 7,
+                          height: 7,
+                          decoration: BoxDecoration(
+                            color: i <= _step ? c.accent : c.track,
+                            borderRadius: BorderRadius.circular(999),
                           ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      ],
+                    ],
                   ),
                 ],
               ),

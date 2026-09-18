@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../geo/country_names.dart';
+
 enum AppLang { fa, en }
 
 class S {
@@ -227,7 +229,7 @@ class S {
         'No country has a verified server right now',
       );
   String serversAvailable(int count) => _t(
-        '$count سرور تأییدشده',
+        '${_n(count)} سرور تأییدشده',
         '$count verified servers',
       );
   String get settings => _t('تنظیمات', 'Settings');
@@ -295,6 +297,72 @@ class S {
   String get allCountries => _t('همه کشورها', 'All countries');
 
   String get protocol => _t('پروتکل', 'Protocol');
+
+  // ── Aurora: the connect screen, the map, and the locations list ──────────
+  //
+  // The design's own wording where the app can honestly say the same thing.
+  // Where it cannot -- a quota, an ad blocker, a device list -- there is no
+  // string here, because the card was not built.
+  String get selectedLocation =>
+      _t('لوکیشن انتخاب‌شده', 'Selected location');
+  String get fastestServer => _t('سریع‌ترین سرور', 'Fastest server');
+  String get fastestServerSub =>
+      _t('بر اساس تستی که خود گوشی گرفته', 'Chosen by this phone\'s own test');
+  String get allLocations => _t('همه لوکیشن‌ها', 'All locations');
+  String get statusProtected => _t('محافظت روشن', 'Protected');
+  String get statusNotProtected => _t('محافظت خاموش', 'Not protected');
+  String get statusDisconnecting => _t('در حال قطع', 'Disconnecting');
+  String get vpnIpLabel => _t('آی‌پی وی‌پی‌ان', 'VPN IP');
+  String get timeProtected => _t('زمان محافظت', 'Time protected');
+  String get thisWeek => _t('این هفته', 'this week');
+  String get liveSpeed => _t('سرعت لحظه‌ای', 'Live speed');
+  String get healthyServers => _t('سرور سالم', 'Healthy servers');
+  String get tabLocations => _t('لوکیشن‌ها', 'Locations');
+  /// Short on purpose: it is a nav label under an icon, five to a row, and
+  /// "Subscriptions" arrived on the phone as "Subscriptio…".
+  String get tabSubscriptions => _t('ساب‌ها', 'Subs');
+  String get mapOffline =>
+      _t('نقشه در دسترس نیست', 'Map unavailable');
+
+  /// A country's name in the language being read.
+  ///
+  /// Not `country`: that name was already taken by the "Country" label on the
+  /// filter sheet, and Dart will not let a class hold both.
+  String countryName(String code) =>
+      lang == AppLang.fa ? CountryNames.persian(code) : CountryNames.of(code);
+
+  /// Digits as the language writes them.
+  ///
+  /// Persian digits in prose, because that is what a Persian sentence reads
+  /// like. Telemetry -- pings, addresses, throughput, the session timer --
+  /// stays Latin and monospaced: those are numbers to compare and copy, not
+  /// words, and they are already isolated LTR wherever they appear.
+  String _n(Object value) {
+    final text = '$value';
+    if (lang != AppLang.fa) return text;
+    const persian = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+    return text.replaceAllMapped(
+      RegExp(r'[0-9]'),
+      (match) => persian[int.parse(match[0]!)],
+    );
+  }
+
+  /// How many servers this phone found working in one country.
+  String healthyHere(int count) => _t(
+        '${_n(count)} سرور سالم',
+        '$count working here',
+      );
+
+  /// The row that opens the full config list for one country.
+  String allServersIn(String country) => _t(
+        'همه سرورهای $country',
+        'All servers in $country',
+      );
+
+  String get allServers =>
+      _t('همه سرورها، با فیلتر و جست‌وجو', 'All servers, with filters');
+  String get untestedYet => _t('هنوز تست نشده', 'Not tested yet');
+  String get testingHere => _t('در حال تست روی گوشی…', 'Testing on this phone…');
   String get country => _t('کشور', 'Country');
   String get quality => _t('کیفیت', 'Quality');
   String get recommendedApp => _t('اپ پیشنهادی', 'Recommended app');

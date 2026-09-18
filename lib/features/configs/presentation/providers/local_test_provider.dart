@@ -64,7 +64,11 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
     // up, so any VPN now is another app's, and every probe goes through it.
     // Found on an A54 with HyperTunnel connected (2026-09-14): the results
     // are still shown, but they describe that VPN's path, not this network.
-    final foreignVpn = await NetworkStatus.vpnActive() == true;
+    final foreignVpn = await NetworkStatus.vpnActive() == true &&
+        // ...and it is not the VPN network this app's own core left behind a
+        // moment ago, which Android reports for several seconds after a
+        // teardown.
+        !service.justStopped;
 
     progress.set(LocalTestProgress(running: true, total: subject.length));
     final results = await service.testCandidates(

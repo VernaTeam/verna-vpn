@@ -78,6 +78,10 @@ class TunnelService {
   /// else while their back was turned.
   List<VpnConfig> _lastCandidates = const [];
   bool _lastUserChose = false;
+
+  /// The country the last connect was asked for, so a tunnel rebuilt after a
+  /// network change comes back in the same place the user chose.
+  String? _lastPreferredCountry;
   bool _recovering = false;
   bool _adopting = false;
 
@@ -379,7 +383,11 @@ class TunnelService {
 
     // Outside the guard: connect() is long, and holding _recovering across it
     // would block the next change from ever being noticed.
-    await connect(_lastCandidates, userChose: _lastUserChose);
+    await connect(
+      _lastCandidates,
+      userChose: _lastUserChose,
+      preferredCountry: _lastPreferredCountry,
+    );
   }
 
   String _elapsed() {
@@ -397,6 +405,20 @@ class TunnelService {
   /// nothing. Reports are sent only then, so the address the API sees is
   /// the phone's own network and not a VPN server's exit.
   bool get noTunnel => _state == ServiceState.stopped || _testing;
+
+  /// Whether this app's own core stopped moments ago.
+  ///
+  /// Android keeps reporting a VPN network for several seconds after a tunnel
+  /// is torn down, so "a VPN is up" right after our own teardown is our own
+  /// ghost rather than another app's. Without this, a whole 346-server test
+  /// run had its results discarded as "measured through someone else's VPN"
+  /// while nothing else was running (seen in the in-app log at 23:38 on
+  /// 2026-09-17).
+  bool get justStopped {
+    final at = _stoppedAt;
+    if (at == null) return false;
+    return DateTime.now().difference(at) < const Duration(seconds: 10);
+  }
 
   Future<bool> requestPermission() async {
     await _ensureInitialized();
@@ -579,17 +601,42 @@ class TunnelService {
   /// United States connected to the Italian one that happened to work last
   /// time, every time, because memory was consulted before the request was.
   /// A deliberate choice is not a hint to be improved upon.
+  /// [preferredCountry] is the exit the user asked for, and it filters the
+  /// remembered shortlist as well as the candidates.
+  ///
+  /// Without it, choosing Germany connected to the United Kingdom every time
+  /// (reported 2026-09-17): the remembered servers are consulted before
+  /// anything else, they are what worked on this network last, and nothing
+  /// checked whether they were in the country the user had just picked. The
+  /// memory was answering a question nobody asked.
   Future<void> connect(
     List<VpnConfig> candidates, {
     bool userChose = false,
+    String? preferredCountry,
   }) async {
     if (_testing) {
       _testCancelled = true;
-      await Future<void>.delayed(const Duration(milliseconds: 400));
+      // Waited out properly, not for a token 400 ms.
+      //
+      // The device test only notices the cancel between batches, and a batch
+      // takes eight to fourteen seconds. Measured on the A54 at 01:11 on
+      // 2026-09-18: a connect started during a run, brought up a tunnel and
+      // verified it in France at 126 ms -- and ten seconds later the test's
+      // own teardown stopped the core underneath it. The log said "Tunnel
+      // ended · stopped outside the app", which was true and useless.
+      final deadline = DateTime.now().add(const Duration(seconds: 20));
+      while (_testing && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
+      if (_testing) {
+        _log.warn('Test did not stop in time',
+            detail: 'connecting anyway; the port may still be held');
+      }
     }
     _cancelled = false;
     _lastCandidates = candidates;
     _lastUserChose = userChose;
+    _lastPreferredCountry = preferredCountry;
     // Named in the log, because the row a finger lands on is not always the
     // row the eye picked -- and "it failed" is only a useful report once it
     // is certain which server failed.
@@ -646,6 +693,7 @@ class TunnelService {
       // Another app's VPN, if one is up: this app's own is not yet started, so
       // the sweep below would go through it and blame servers for its path.
       final foreignVpn = _state == ServiceState.stopped &&
+          !justStopped &&
           await NetworkStatus.vpnActive() == true;
       final before = await _readEgress(timeout: const Duration(seconds: 6));
       final network = before?.network ?? 'unknown';
@@ -659,7 +707,15 @@ class TunnelService {
       final remembered = userChose
           ? const <KnownGood>[]
           : await KnownGoodStore.forNetwork(network);
-      final rememberedConfigs = [for (final e in remembered) e.toConfig()];
+      final wanted = preferredCountry?.toUpperCase();
+      final rememberedConfigs = [
+        for (final entry in remembered)
+          if (entry.toConfig() case final config)
+            // A remembered server in the wrong country is not a shortcut, it
+            // is the app ignoring the request.
+            if (wanted == null || config.countryCode.toUpperCase() == wanted)
+              config,
+      ];
 
       // A plain TCP connect to each server, all at once. The core's own test
       // is better but costs a service start; this throws out hosts that are
@@ -950,6 +1006,17 @@ class TunnelService {
   }) async {
     if (_state != ServiceState.stopped) {
       _log.warn('Server test skipped', detail: 'a tunnel is currently up');
+      return const {};
+    }
+    // The core being stopped is not enough. A connect spends most of its
+    // minute with the core down between candidates, and a test starting in
+    // one of those gaps ends by stopping the core -- which, measured on the
+    // A54 at 02:06 on 2026-09-18, killed a tunnel the connect had just
+    // brought up. The phase knows what the core cannot: that someone is
+    // already working on a connection.
+    if (_snapshot.isConnected || _snapshot.isBusy) {
+      _log.warn('Server test skipped',
+          detail: 'a connection is in progress (${_snapshot.phase.name})');
       return const {};
     }
     final subject =
