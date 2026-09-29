@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:verna_vpn/core/app_version.dart';
 import 'package:verna_vpn/features/configs/domain/vpn_config.dart';
 import 'package:verna_vpn/features/reports/data/measurement_report.dart';
 import 'package:verna_vpn/features/tunnel/data/candidate_selector.dart';
@@ -153,7 +154,11 @@ void main() {
       expect(wifi.toJson()['mobile_operator'], isNull);
       expect(MeasurementReport.fromJson(cellular.toJson())!.mobileOperator,
           '43235');
-      expect(cellular.appVersion, '1.0.0/r03');
+      // The revision is the part the bot reads, and it is what this test is
+      // about. The prefix moves with every release now, so pinning the whole
+      // string here would fail on each version bump and say nothing.
+      expect(cellular.appVersion, endsWith('/r03'));
+      expect(cellular.appVersion, startsWith(kAppVersion));
     });
 
     test('every measurement gets its own uid', () {

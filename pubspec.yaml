@@ -1,12 +1,14 @@
 name: verna_vpn
 description: Verna VPN - Free VPN Configs
 publish_to: 'none'
-# Build 3002, and the reason is worth reading before touching it.
+# Build 6004, and the reason is worth reading before touching it.
 #
 # `--split-per-abi` rewrites versionCode as abi * 1000 + build, so this number
-# produces armeabi 4002, arm64 5002 and x86_64 7002 -- each one above the
-# beta's 1001 / 2001 / 4001, which is what lets every beta install upgrade in
-# place. Android only ever upgrades to a HIGHER code.
+# produces armeabi 7004, arm64 8004 and x86_64 10004. Every one of those sits
+# above 1.0.0's codes -- splits 4002 / 5002 / 7002 and universal 7003 -- which
+# is what lets each install upgrade in place. Android only ever upgrades to a
+# HIGHER code, so the LOWEST code a release generates (1000 + build) must beat
+# the HIGHEST code the release before it published.
 #
 # Building each ABI *without* the flag (so they would all share one code) was
 # tried and rejected: the tunnel core arrives as an AAR carrying all three
@@ -14,9 +16,14 @@ publish_to: 'none'
 # 80 MB instead of 32. On the connections this app is for, that matters more
 # than a tidy versionCode.
 #
-# The universal APK is built with `--build-number=7003` so it sits above every
-# split and installs over anything. The version name stays 1.0.0.
-version: 1.0.0+3002
+# The universal APK is built with `--build-number=10005` so it sits above every
+# split in this release and installs over anything.
+#
+# The version NAME moves with every release now (Meysam, 2026-09-30), and it
+# has to: the in-app update check compares it against the newest GitHub tag,
+# so a name that stays put means an app that never recognises its successor.
+# Keep it equal to kAppVersion in lib/core/app_version.dart.
+version: 1.0.1+6004
 
 environment:
   sdk: '>=3.0.0 <4.0.0'

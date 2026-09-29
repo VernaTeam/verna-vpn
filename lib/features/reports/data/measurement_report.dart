@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 
+import '../../../core/app_version.dart';
 import '../../configs/domain/vpn_config.dart';
 
 /// Which test a report describes.
@@ -79,13 +80,19 @@ class MeasurementReport {
 
   /// The app version plus a zero-padded report-format revision.
   ///
-  /// The app's own version is frozen at 1.0.0 until the first real
-  /// release, so it cannot tell builds apart. The bot needs to: rows
-  /// before r02 were sent through whatever tunnel was up, so their
-  /// reporter hash describes a VPN server, not a user. Zero-padded so
-  /// r10 still sorts after r02 when anyone compares these as strings.
-  /// r03 adds [mobileOperator]; reporter semantics are those of r02.
-  static const String currentAppVersion = '1.0.0/r03';
+  /// The version used to be frozen at 1.0.0 -- there had been no real
+  /// release -- so the `/rNN` suffix was the only thing that could tell
+  /// builds apart. It still is what the bot reads: rows before r02 were
+  /// sent through whatever tunnel was up, so their reporter hash describes
+  /// a VPN server, not a user. Zero-padded so r10 still sorts after r02
+  /// when anyone compares these as strings. r03 adds [mobileOperator];
+  /// reporter semantics are those of r02.
+  ///
+  /// The prefix now moves with [kAppVersion], so a row also says which
+  /// release produced it. The bot keys on `/rNN` and ignores the prefix, so
+  /// raising the version here is safe; raising **r** is not, and needs the
+  /// bot session told first.
+  static const String currentAppVersion = '$kAppVersion/r03';
 
   /// A report for [config], or null when it must not or cannot be sent.
   ///
