@@ -28,6 +28,20 @@ class LogEntry {
         ? '$timestamp  $tag  $message'
         : '$timestamp  $tag  $message\n                  $detail';
   }
+
+  /// Plain text for the file, which outlives the day it was written in.
+  ///
+  /// The on-screen list can afford a bare clock -- it is obviously today. A
+  /// file that keeps several days of history cannot: "03:14 connect failed" is
+  /// useless when the question is whether it happened last night or last week.
+  String get fileText {
+    String two(int n) => n.toString().padLeft(2, '0');
+    final day = '${at.year}-${two(at.month)}-${two(at.day)}';
+    final tag = level.name.toUpperCase().padRight(5);
+    return detail == null
+        ? '$day $timestamp  $tag  $message'
+        : '$day $timestamp  $tag  $message\n                             $detail';
+  }
 }
 
 enum LogLevel {

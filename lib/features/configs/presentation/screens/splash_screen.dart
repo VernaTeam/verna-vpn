@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/app_version.dart';
 import '../../../../core/theme/palette.dart';
 
 /// The boot screen, as the design draws it.
@@ -190,7 +191,7 @@ class _SplashScreenState extends ConsumerState<SplashScreen>
               right: 0,
               bottom: 34,
               child: Text(
-                'VERNA 1.0.0',
+                'VERNA $kAppVersion',
                 textAlign: TextAlign.center,
                 textDirection: TextDirection.ltr,
                 style: TextStyle(

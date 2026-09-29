@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -28,14 +30,24 @@ class DiagnosticsScreen extends ConsumerStatefulWidget {
 class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
   _Snapshot? _snapshot;
   bool _loading = true;
+  StreamSubscription<void>? _logChanges;
 
   @override
   void initState() {
     super.initState();
-    AppLog.instance.changes.listen((_) {
+    // Held and cancelled: the log outlives this screen, so a subscription left
+    // behind would stay alive for the rest of the process -- one more for
+    // every visit to this screen.
+    _logChanges = AppLog.instance.changes.listen((_) {
       if (mounted) setState(() {});
     });
     _refresh();
+  }
+
+  @override
+  void dispose() {
+    _logChanges?.cancel();
+    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -114,9 +126,9 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
                   )),
               const Spacer(),
               TextButton(
-                onPressed: () {
-                  AppLog.instance.clear();
-                  setState(() {});
+                onPressed: () async {
+                  await AppLog.instance.clear();
+                  if (mounted) setState(() {});
                 },
                 child: Text(strings.clear),
               ),
@@ -132,6 +144,63 @@ class _DiagnosticsScreenState extends ConsumerState<DiagnosticsScreen> {
               ),
             ),
           ...entries.map((e) => _LogRow(entry: e)),
+          if (AppLog.instance.hasEarlier) const _EarlierRuns(),
+        ],
+      ),
+    );
+  }
+}
+
+/// What the log file kept from before this run.
+///
+/// Folded away by default: it can be thousands of lines, and the question is
+/// usually about what just happened. It is here for the other case -- the app
+/// was killed, or crashed, and the interesting part is everything before the
+/// restart. The copy button at the top of the screen takes this too.
+class _EarlierRuns extends ConsumerWidget {
+  const _EarlierRuns();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.verna;
+    final strings = ref.watch(stringsProvider);
+    final text = AppLog.instance.earlier.trimRight();
+    final lines = const LineSplitter().convert(text).length;
+    return Theme(
+      // The divider a plain ExpansionTile draws would cut the events list in
+      // two places for no reason.
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: EdgeInsets.zero,
+        title: Text(strings.diagEarlier,
+            style: TextStyle(
+              color: c.textPrimary,
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+            )),
+        subtitle: Text(strings.diagEarlierLines(lines),
+            style: TextStyle(color: c.textMuted, fontSize: 12)),
+        children: [
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: c.surface,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            padding: const EdgeInsets.all(12),
+            child: Directionality(
+              textDirection: TextDirection.ltr,
+              child: SelectableText(
+                text,
+                style: TextStyle(
+                  color: c.textSecondary,
+                  fontSize: 11,
+                  height: 1.5,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -355,6 +424,7 @@ Future<_Snapshot> _collect(WidgetRef ref) async {
       ('Package', 'ir.vernaservice.vpn'),
       ('Language', strings.isFa ? 'fa' : 'en'),
       ('Build', kReleaseModeLabel),
+      ('Log file', AppLog.instance.filePath ?? '—'),
     ],
     device: [
       ('OS', '${Platform.operatingSystem} ${Platform.operatingSystemVersion}'),

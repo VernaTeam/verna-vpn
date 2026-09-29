@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../diagnostics/data/app_log.dart';
+
 /// The exit country the user chose, kept across launches.
 ///
 /// It used to live only in a provider, so closing the app put the picker back
@@ -23,6 +25,11 @@ class PreferredCountryStore {
   }
 
   static Future<void> save(String? code) async {
+    // "I picked Germany and it connected to England" was a real bug. The log
+    // now says what the app was told to prefer, so the next such report can
+    // be answered instead of reproduced.
+    AppLog.instance.info('Location preference',
+        detail: code == null || code.isEmpty ? 'automatic' : code);
     try {
       final prefs = await SharedPreferences.getInstance();
       if (code == null || code.isEmpty) {

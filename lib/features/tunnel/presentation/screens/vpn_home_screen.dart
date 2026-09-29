@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -11,6 +13,7 @@ import '../../../configs/presentation/providers/local_test_provider.dart';
 import '../../../map/presentation/world_map.dart';
 import '../../../stats/data/protected_time_store.dart';
 import '../../domain/tunnel_snapshot.dart';
+import '../providers/own_ip_provider.dart';
 import '../providers/tunnel_provider.dart';
 
 /// The connect screen, built to the Aurora design handoff.
@@ -186,74 +189,124 @@ class _AuraHeader extends StatelessWidget {
     // would otherwise end up sitting on the button as the dome closes in.
     final wordmark = (1 - t * 1.8).clamp(0.0, 1.0);
 
+    // Where the button's circle actually sits, which is what the glow is
+    // centred on. The widget is 28 taller than the button (the ring's inset),
+    // so its centre is this, not the widget's top.
+    final buttonCentre = aura - rise + button / 2;
+    final glowRadius = button * 1.6;
+
     return SizedBox(
       height: aura + well + tail,
-      child: Stack(
-        clipBehavior: Clip.none,
-        alignment: Alignment.topCenter,
-        children: [
-          // Opaque, or the cards scrolling underneath show through the strip
-          // between the dome's edge and the status line.
-          Positioned.fill(child: ColoredBox(color: c.background)),
-          // ClipRect, because the dome is drawn in a box far taller than the
-          // aura and the design lets the top of it fall off the screen.
-          ClipRect(
-            child: SizedBox(
-              height: aura,
-              width: double.infinity,
-              // The design transitions the rings over .55s, and the wordmark
-              // and the status text inherit their ink from them -- so the
-              // whole top of the screen tints as one thing when the tunnel
-              // changes state, rather than snapping colour by colour.
-              child: TweenAnimationBuilder<_AuraRings>(
-                tween: _AuraTween(end: rings),
-                duration: const Duration(milliseconds: 550),
-                curve: Curves.easeOut,
-                builder: (context, value, _) => CustomPaint(
-                  painter: _AuraPainter(rings: value),
-                  child: Padding(
-                    padding: EdgeInsets.only(top: _at(46, 22, t)),
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Opacity(
-                        opacity: wordmark,
-                        child: Text(
-                          'VERNA VPN',
-                          style: TextStyle(
-                            fontFamily: VernaType.mono,
-                            color: value.ink,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 3.4,
+      // One builder over the whole header: the domes, the glow and the
+      // wordmark's ink all cross-fade together when the state changes, which
+      // is what makes the top of the screen read as one thing.
+      child: TweenAnimationBuilder<_AuraRings>(
+        tween: _AuraTween(end: rings),
+        duration: const Duration(milliseconds: 550),
+        curve: Curves.easeOut,
+        builder: (context, value, _) => Stack(
+          clipBehavior: Clip.none,
+          alignment: Alignment.topCenter,
+          children: [
+            // Opaque, or the cards scrolling underneath show through the strip
+            // between the dome's edge and the status line.
+            Positioned.fill(child: ColoredBox(color: c.background)),
+            // ClipRect, because the dome is drawn in a box far taller than the
+            // aura and the design lets the top of it fall off the screen.
+            ClipRect(
+              child: SizedBox(
+                height: aura,
+                width: double.infinity,
+                child: Stack(
+                  children: [
+                    Positioned.fill(
+                      child: CustomPaint(
+                        painter: _AuraPainter(rings: value),
+                        child: Padding(
+                          padding: EdgeInsets.only(top: _at(46, 22, t)),
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            child: Opacity(
+                              opacity: wordmark,
+                              child: Text(
+                                'VERNA VPN',
+                                style: TextStyle(
+                                  fontFamily: VernaType.mono,
+                                  color: value.ink,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  letterSpacing: 3.4,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
+                    // The light comes from behind the button, and only from
+                    // above it.
+                    //
+                    // Centred on the button's own centre -- which sits on the
+                    // aura's bottom edge -- and clipped by this box, so what
+                    // shows is the upper half: light rising from behind the
+                    // button rather than a ring around it. Outside the clip it
+                    // lit the whole circle; and the prototype's own geometry
+                    // put the centre 120 px higher, where it read as a patch
+                    // floating over nothing.
+                    Positioned(
+                      top: buttonCentre - glowRadius,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: IgnorePointer(
+                          child: Container(
+                            width: glowRadius * 2,
+                            height: glowRadius * 2,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                colors: [
+                                  value.glow.withValues(
+                                    alpha: value.glow.a * value.glowOpacity,
+                                  ),
+                                  value.glow.withValues(
+                                    alpha:
+                                        value.glow.a * value.glowOpacity * 0.45,
+                                  ),
+                                  value.glow.withValues(alpha: 0),
+                                ],
+                                stops: const [0, 0.42, 1],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-          ),
-          Positioned(
-            // Minus the ring's own inset: the button widget is 28 wider than
-            // the button, so placing the widget at -58 put the circle 14 px
-            // lower than the design and halved the gap to the status line.
-            top: aura - rise - _PowerButton.ringInset,
-            child: _PowerButton(
-              snapshot: snapshot,
-              size: button,
-              onTap: onTap,
+            Positioned(
+              // Minus the ring's own inset: the button widget is 28 wider than
+              // the button, so placing the widget at -58 put the circle 14 px
+              // lower than the design and halved the gap to the status line.
+              top: aura - rise - _PowerButton.ringInset,
+              child: _PowerButton(
+                snapshot: snapshot,
+                size: button,
+                onTap: onTap,
+              ),
             ),
-          ),
-          Positioned(
-            top: aura + well + _at(16, 6, t),
-            child: _StatusLine(
-              snapshot: snapshot,
-              strings: strings,
-              scale: _at(1, 0.82, t),
+            Positioned(
+              top: aura + well + _at(16, 6, t),
+              child: _StatusLine(
+                snapshot: snapshot,
+                strings: strings,
+                scale: _at(1, 0.82, t),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -383,23 +436,10 @@ class _AuraPainter extends CustomPainter {
     dome(1.46, 0.79, rings.mid);
     dome(1.0, 0.58, rings.outer);
 
-    // `.glow`: a 320 px circle whose bottom hangs 40 px below the aura, so the
-    // light pools where the button will sit rather than behind the whole dome.
-    const glowRadius = 160.0;
-    final centre = Offset(size.width / 2, bottom + 40 - glowRadius);
-    final colour = rings.glow.withValues(
-      alpha: rings.glow.a * rings.glowOpacity,
-    );
-    canvas.drawCircle(
-      centre,
-      glowRadius,
-      Paint()
-        ..shader = RadialGradient(
-          colors: [colour, colour.withValues(alpha: 0)],
-          // Transparent by 66%, as the prototype's gradient stop has it.
-          stops: const [0, 0.66],
-        ).createShader(Rect.fromCircle(center: centre, radius: glowRadius)),
-    );
+    // No glow here. The prototype paints it inside this box, where the clip
+    // cuts it at the dome's edge and its centre lands well above the button;
+    // on a phone that reads as a bright patch floating over nothing. It is
+    // drawn behind the button instead -- see `_AuraHeader`.
   }
 
   @override
@@ -824,19 +864,28 @@ class _MapCard extends ConsumerWidget {
     final c = context.verna;
     final chosen = ref.watch(chosenServerProvider);
     final preferred = ref.watch(preferredCountryProvider);
+    // Read only while nothing is tunnelling; see OwnIpNotifier.
+    final ownIp = ref.watch(ownIpProvider).valueOrNull;
 
     final connected = snapshot.isConnected;
-    final code = connected
+    final chosenCode = connected
         ? snapshot.displayCountryCode
         : (chosen?.countryCode ?? preferred);
+    // In automatic mode there is no chosen country, and the map sat on the
+    // whole world with an address in the corner and no place attached to it.
+    // The user's own country is the honest thing to show there: it is where
+    // they are now, and it is what the tunnel is about to change.
+    final showingOwn = !connected && chosenCode == null;
+    final code = showingOwn ? ownIp?.country : chosenCode;
 
     // Cyan only ever means protected. A country the app has merely been asked
     // to use is amber, and one that just failed is rose -- the design's rule,
-    // applied to the states this app actually has.
+    // applied to the states this app actually has. The user's own country is
+    // none of those: it is where they are, not a plan, so it stays idle grey.
     final highlight = switch (snapshot.phase) {
       TunnelPhase.connected => MapHighlight.connected,
       TunnelPhase.failed => MapHighlight.failed,
-      _ => code == null ? MapHighlight.idle : MapHighlight.pending,
+      _ => chosenCode == null ? MapHighlight.idle : MapHighlight.pending,
     };
 
     // 158 as the design has it, less on a short screen. The handoff's layout
@@ -868,7 +917,10 @@ class _MapCard extends ConsumerWidget {
             // Beside the pin, vertically centred, as `.callout.right` has it:
             // the pin is always at the middle of the card because the camera
             // put it there.
-            if (code != null && !snapshot.isBusy)
+            // A country, or an address, or both. Automatic mode with nothing
+            // chosen has no country to name -- and that is exactly the state
+            // the user's own address belongs in.
+            if ((code != null || ownIp != null) && !snapshot.isBusy)
               PositionedDirectional(
                 start: 0,
                 end: 10,
@@ -878,14 +930,20 @@ class _MapCard extends ConsumerWidget {
                   alignment: AlignmentDirectional.centerEnd,
                   child: _MapCallout(
                     code: code,
-                    flag: flagEmoji(
-                      code,
-                      fallback: connected
-                          ? (snapshot.active?.flag ?? '')
-                          : (chosen?.flag ?? ''),
-                    ),
-                    ip: connected ? snapshot.exitIp : null,
-                    label: connected ? strings.vpnIpLabel : null,
+                    flag: code == null
+                        ? ''
+                        : flagEmoji(
+                            code,
+                            fallback: connected
+                                ? (snapshot.active?.flag ?? '')
+                                : (showingOwn ? '' : (chosen?.flag ?? '')),
+                          ),
+                    // Before: the address the user actually has. After: the
+                    // one the tunnel gives them. Seeing both is the whole
+                    // point of the card.
+                    ip: connected ? snapshot.exitIp : ownIp?.ip,
+                    label:
+                        connected ? strings.vpnIpLabel : strings.ownIpLabel,
                     strings: strings,
                   ),
                 ),
@@ -906,7 +964,9 @@ class _MapCallout extends StatelessWidget {
     required this.strings,
   });
 
-  final String code;
+  /// Null in automatic mode before a connection: there is no country to
+  /// name yet, only an address.
+  final String? code;
   final String flag;
   final String? ip;
   final String? label;
@@ -937,6 +997,7 @@ class _MapCallout extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (code != null)
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -944,7 +1005,7 @@ class _MapCallout extends StatelessWidget {
               const SizedBox(width: 9),
               Flexible(
                 child: Text(
-                  strings.countryName(code),
+                  strings.countryName(code!),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -958,7 +1019,7 @@ class _MapCallout extends StatelessWidget {
             ],
           ),
           if (ip != null && label != null) ...[
-            const SizedBox(height: 6),
+            if (code != null) const SizedBox(height: 6),
             Text(
               label!,
               style: TextStyle(color: c.textFaint, fontSize: 9.5),
@@ -1040,7 +1101,12 @@ class _MiniCardGrid extends ConsumerWidget {
                 onTap: () => ref.read(shellTabProvider.notifier).select(1),
                 child: _ValueBody(
                   value: snapshot.active?.type.label.toUpperCase() ?? '—',
-                  sub: ping == null ? '—' : '$ping ms',
+                  // The healthy count moved here when ping took its card.
+                  // It is a fact about the list, and the protocol is the other
+                  // one -- neither needed a card of its own.
+                  sub: working > 0
+                      ? '$working ${strings.subHealthy}'
+                      : '${pool.length} ${strings.untestedYet}',
                   colour: c.textPrimary,
                 ),
               ),
@@ -1048,15 +1114,9 @@ class _MiniCardGrid extends ConsumerWidget {
             const SizedBox(width: 10),
             Expanded(
               child: _MiniCard(
-                title: strings.healthyServers,
+                title: strings.ping,
                 onTap: () => ref.read(shellTabProvider.notifier).select(1),
-                child: _ValueBody(
-                  value: working > 0 ? '$working' : '${pool.length}',
-                  sub: working > 0
-                      ? strings.subHealthy
-                      : strings.untestedYet,
-                  colour: working > 0 ? c.ok : c.textPrimary,
-                ),
+                child: _PingBody(milliseconds: ping, strings: strings),
               ),
             ),
           ],
@@ -1113,12 +1173,22 @@ class _MiniCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 11),
-            child,
+            // One height for all four, so the grid is a grid.
+            //
+            // They used to size themselves: each row was paired by an
+            // IntrinsicHeight and the two rows ended up different heights,
+            // which Meysam saw immediately -- «دوتا مربع بالا با دوتا مربع
+            // پایین سایزش برابر نیست». Every body now gets the same box and
+            // lays itself out inside it.
+            SizedBox(height: bodyHeight, child: child),
           ],
         ),
       ),
     );
   }
+
+  /// Tall enough for the roomiest body: two stacked rates in the speed card.
+  static const double bodyHeight = 46;
 }
 
 /// Hours behind a tunnel this week, with a bar per day.
@@ -1202,83 +1272,341 @@ class _ProtectedBody extends StatelessWidget {
 }
 
 /// Down and up, as the core reports them.
-class _SpeedBody extends StatelessWidget {
+/// Down and up, each with its unit, over a line of the last half-minute.
+///
+/// It used to be two bare numbers in kilobytes with no unit on them, which
+/// told the reader a quantity and not what of -- Meysam, 2026-09-30: "فقط عدد
+/// نشون میده و معلوم نیست چیه". Now each rate carries a direction and a unit
+/// that scales with it, and the strip underneath shows where those numbers
+/// have just been, which is what makes a live reading worth looking at.
+///
+/// The core reports once a second and that cannot be changed from here -- the
+/// interval is fixed in the plugin's Kotlin (`statusInterval`), and its pull
+/// API returns the same cached sample. So the numbers are *animated* between
+/// readings instead: the value glides to each new sample over most of a
+/// second rather than stepping, which is what "faster" actually looks like on
+/// a screen.
+class _SpeedBody extends StatefulWidget {
   const _SpeedBody({required this.snapshot, required this.strings});
 
   final TunnelSnapshot snapshot;
   final S strings;
 
   @override
+  State<_SpeedBody> createState() => _SpeedBodyState();
+}
+
+class _SpeedBodyState extends State<_SpeedBody> {
+  /// How many samples the strip holds. At one a second this is the last
+  /// half-minute, which is long enough to show a burst and short enough that
+  /// the line still moves visibly.
+  static const int _window = 30;
+
+  final List<int> _down = <int>[];
+  final List<int> _up = <int>[];
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // On a clock of its own rather than on the snapshot: a second of no
+    // traffic produces an identical snapshot and no rebuild, and the line has
+    // to keep moving through the quiet part or it reads as frozen.
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) => _sample());
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
+
+  void _sample() {
+    if (!mounted) return;
+    final snapshot = widget.snapshot;
+    setState(() {
+      if (!snapshot.isConnected) {
+        // Nothing to draw, and a strip left over from the last session would
+        // describe a tunnel that no longer exists.
+        _down.clear();
+        _up.clear();
+        return;
+      }
+      _down.add(snapshot.downloadSpeed);
+      _up.add(snapshot.uploadSpeed);
+      while (_down.length > _window) {
+        _down.removeAt(0);
+      }
+      while (_up.length > _window) {
+        _up.removeAt(0);
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
     final c = context.verna;
-    return Row(
-      children: [
-        Expanded(
-          child: _Rate(
-            label: strings.statDownload,
-            bytesPerSecond: snapshot.downloadSpeed,
-            colour: c.ok,
+    // The strip sits *behind* the two readings rather than under them. A row
+    // of its own made the card taller than the one beside it and pushed the
+    // protocol and ping cards under the nav bar -- measured on the A54, and
+    // the same complaint as the scroll fix in §39. Behind, it costs nothing
+    // in height and still shows where the numbers have been.
+    return SizedBox(
+      width: double.infinity,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _SparkPainter(
+                down: List<int>.unmodifiable(_down),
+                up: List<int>.unmodifiable(_up),
+                downColour: c.ok,
+                upColour: c.accentBlue,
+                idleColour: c.border,
+              ),
+            ),
           ),
-        ),
-        Expanded(
-          child: _Rate(
-            label: strings.statUpload,
-            bytesPerSecond: snapshot.uploadSpeed,
-            colour: c.accentBlue,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _RateLine(
+                icon: Icons.south_rounded,
+                bytesPerSecond: widget.snapshot.downloadSpeed,
+                colour: c.ok,
+              ),
+              const SizedBox(height: 5),
+              _RateLine(
+                icon: Icons.north_rounded,
+                bytesPerSecond: widget.snapshot.uploadSpeed,
+                colour: c.accentBlue,
+              ),
+            ],
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }
 
-class _Rate extends StatelessWidget {
-  const _Rate({
-    required this.label,
+/// One direction: an arrow, the number, and the unit it is in.
+class _RateLine extends StatelessWidget {
+  const _RateLine({
+    required this.icon,
     required this.bytesPerSecond,
     required this.colour,
   });
 
-  final String label;
+  final IconData icon;
   final int bytesPerSecond;
   final Color colour;
+
+  /// Kilobytes per second, always.
+  ///
+  /// It scaled to MB/s at first, and the unit changing under a moving number
+  /// made the card impossible to read at a glance -- Meysam, 2026-09-30:
+  /// «خیلی سریع عدد عوض میکنه، فقط KB نشون بده». One unit, whole numbers, one
+  /// new reading a second: a value that stays still long enough to be read.
+  static String format(int bps) {
+    final kb = bps / 1024;
+    if (kb <= 0) return '0';
+    // Below a tenth of a kilobyte there is traffic but nothing to round to.
+    return kb < 1 ? kb.toStringAsFixed(1) : kb.round().toString();
+  }
 
   @override
   Widget build(BuildContext context) {
     final c = context.verna;
     final idle = bytesPerSecond <= 0;
-    final kb = bytesPerSecond / 1024;
+    // Muted at rest: throughput is zero whenever the app is in the foreground
+    // -- nobody downloads anything while looking at a VPN screen -- and two
+    // bright zeroes teach the reader to ignore the row.
+    final ink = idle ? c.textFaint : colour;
+
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
+        children: [
+          Padding(
+            padding: const EdgeInsets.only(right: 4),
+            child: Icon(icon, size: 12, color: ink),
+          ),
+          Text(
+            format(bytesPerSecond),
+            style: TextStyle(
+              fontFamily: VernaType.mono,
+              color: ink,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              height: 1,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+          const SizedBox(width: 3),
+          Text(
+            'KB/s',
+            style: TextStyle(
+              color: c.textFaint,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w600,
+              height: 1,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SparkPainter extends CustomPainter {
+  const _SparkPainter({
+    required this.down,
+    required this.up,
+    required this.downColour,
+    required this.upColour,
+    required this.idleColour,
+  });
+
+  final List<int> down;
+  final List<int> up;
+  final Color downColour;
+  final Color upColour;
+  final Color idleColour;
+
+  /// 16 KB/s. Under this the line stays flat rather than magnifying noise.
+  static const double _floor = 16 * 1024;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final baseline = Paint()
+      ..color = idleColour
+      ..strokeWidth = 1;
+    canvas.drawLine(
+      Offset(0, size.height - 0.5),
+      Offset(size.width, size.height - 0.5),
+      baseline,
+    );
+    if (down.length < 2) return;
+
+    var peak = _floor;
+    for (final value in [...down, ...up]) {
+      if (value > peak) peak = value.toDouble();
+    }
+
+    void series(List<int> values, Color colour) {
+      if (values.length < 2) return;
+      final step = size.width / (_SpeedBodyState._window - 1);
+      // Right-aligned: the newest reading sits at the right edge, so a short
+      // history grows from there instead of stretching to fit.
+      final offset = size.width - step * (values.length - 1);
+      final path = Path();
+      for (var i = 0; i < values.length; i++) {
+        final x = offset + step * i;
+        final y = size.height - (values[i] / peak).clamp(0.0, 1.0) * (size.height - 2);
+        if (i == 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
+      }
+      final fill = Path.from(path)
+        ..lineTo(offset + step * (values.length - 1), size.height)
+        ..lineTo(offset, size.height)
+        ..close();
+      canvas.drawPath(
+        fill,
+        Paint()..color = colour.withValues(alpha: 0.10),
+      );
+      canvas.drawPath(
+        path,
+        Paint()
+          // Half-lit: it is behind two lines of text, and a bright line
+          // through a number costs more than the graph adds.
+          ..color = colour.withValues(alpha: 0.5)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.4
+          ..strokeJoin = StrokeJoin.round
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+
+    series(up, upColour);
+    series(down, downColour);
+  }
+
+  @override
+  bool shouldRepaint(_SparkPainter old) =>
+      !listEquals(old.down, down) || !listEquals(old.up, up);
+}
+
+/// The round trip to the server this phone is on, and what that number means.
+///
+/// A bare "212 ms" asks the reader to know what a good one is. The word under
+/// it answers that, and the colour says the same thing again for anyone who
+/// reads the card without reading the word.
+class _PingBody extends StatelessWidget {
+  const _PingBody({required this.milliseconds, required this.strings});
+
+  final int? milliseconds;
+  final S strings;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = context.verna;
+    final ms = milliseconds;
+    // Bands for a tunnel out of Iran, not for a LAN: under 120 ms is as good
+    // as this gets, and past 300 ms pages start feeling slow to open however
+    // much bandwidth is behind it.
+    final (label, colour) = switch (ms) {
+      null => (strings.pingUnknown, c.textMuted),
+      final v when v <= 120 => (strings.pingExcellent, c.ok),
+      final v when v <= 300 => (strings.pingGood, c.textPrimary),
+      _ => (strings.pingSlow, c.warn),
+    };
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Directionality(
+          textDirection: TextDirection.ltr,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                ms == null ? '—' : '$ms',
+                style: TextStyle(
+                  fontFamily: VernaType.mono,
+                  color: colour,
+                  fontSize: 19,
+                  fontWeight: FontWeight.w700,
+                  height: 1,
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+              ),
+              if (ms != null) ...[
+                const SizedBox(width: 3),
+                Text(
+                  'ms',
+                  style: TextStyle(
+                    color: c.textFaint,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    height: 1,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 4),
         Text(
           label,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
-          style: TextStyle(color: c.textFaint, fontSize: 9.5),
-        ),
-        const SizedBox(height: 3),
-        Directionality(
-          textDirection: TextDirection.ltr,
-          child: Text(
-            idle
-                ? '0'
-                : kb >= 100
-                    ? kb.toStringAsFixed(0)
-                    : kb.toStringAsFixed(1),
-            style: TextStyle(
-              fontFamily: VernaType.mono,
-              // Muted at rest: throughput is zero whenever the app is in the
-              // foreground -- nobody downloads anything while looking at a VPN
-              // screen -- and a bright zero twice over teaches the reader to
-              // ignore the row.
-              color: idle ? c.textFaint : colour,
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
+          style: TextStyle(color: c.textMuted, fontSize: 11),
         ),
       ],
     );

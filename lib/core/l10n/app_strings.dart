@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../features/diagnostics/data/app_log.dart';
 import '../geo/country_names.dart';
 
 enum AppLang { fa, en }
@@ -214,6 +215,10 @@ class S {
   String get diagEvents => _t('رویدادها', 'Events');
   String get diagNoEvents =>
       _t('هنوز رویدادی ثبت نشده', 'Nothing logged yet');
+  String get diagEarlier =>
+      _t('اجراهای پیشین', 'Earlier runs');
+  String diagEarlierLines(int n) =>
+      _t('${_n('$n')} خط ذخیره‌شده', '$n lines on file');
   String get clear => _t('پاک‌کردن', 'Clear');
   String get unreachable => _t('در دسترس نیست', 'unreachable');
   String selectedCount(int n) => _t('$n انتخاب‌شده', '$n selected');
@@ -312,11 +317,19 @@ class S {
   String get statusProtected => _t('محافظت روشن', 'Protected');
   String get statusNotProtected => _t('محافظت خاموش', 'Not protected');
   String get statusDisconnecting => _t('در حال قطع', 'Disconnecting');
-  String get vpnIpLabel => _t('آی‌پی وی‌پی‌ان', 'VPN IP');
+  // Latin in both languages, with the colon Meysam asked for on 2026-09-30:
+  // these label an address, and an address is read left to right whatever the
+  // rest of the screen is doing.
+  String get vpnIpLabel => 'VPN IP :';
+  String get ownIpLabel => 'Your IP :';
   String get timeProtected => _t('زمان محافظت', 'Time protected');
   String get thisWeek => _t('این هفته', 'this week');
   String get liveSpeed => _t('سرعت لحظه‌ای', 'Live speed');
   String get healthyServers => _t('سرور سالم', 'Healthy servers');
+  String get pingExcellent => _t('عالی', 'Excellent');
+  String get pingGood => _t('خوب', 'Good');
+  String get pingSlow => _t('کند', 'Slow');
+  String get pingUnknown => _t('اندازه‌گیری نشده', 'Not measured');
   String get tabLocations => _t('لوکیشن‌ها', 'Locations');
   /// Short on purpose: it is a nav label under an icon, five to a row, and
   /// "Subscriptions" arrived on the phone as "Subscriptio…".
@@ -388,6 +401,28 @@ class S {
   String get appearance => _t('ظاهر', 'Appearance');
   String get connection => _t('اتصال', 'Connection');
   String get maintenance => _t('درباره و نگهداری', 'About & maintenance');
+
+  // -- updates ---------------------------------------------------------
+  String get checkForUpdates => _t('بررسی نسخه جدید', 'Check for updates');
+  String get checkForUpdatesHint =>
+      _t('آخرین نسخه را از گیت‌هاب بررسی می‌کند',
+          'Looks for a newer release on GitHub');
+  String get checkingForUpdates => _t('در حال بررسی…', 'Checking…');
+  String get upToDate =>
+      _t('نسخه شما به‌روز است', 'You are on the latest version');
+  String get updateCheckFailed =>
+      _t('بررسی ممکن نشد', 'Could not check for updates');
+  String updateAvailable(String version) =>
+      _t('نسخه $version منتشر شده', 'Version $version is available');
+  String updateBody(String version) => _t(
+      'نسخه $version روی گیت‌هاب منتشر شده است. فایل مناسب گوشی شما در مرورگر باز می‌شود؛ دانلود و نصب با خودتان است.',
+      'Version $version is on GitHub. The file for your phone opens in your browser; downloading and installing it is up to you.');
+  String get updateNow => _t('دریافت', 'Get it');
+  String get notNow => _t('بعداً', 'Not now');
+  String get openedInBrowser =>
+      _t('لینک در مرورگر باز شد', 'Opened in your browser');
+  String get couldNotOpenBrowser =>
+      _t('مرورگر باز نشد', 'Could not open a browser');
   String get autoConnect => _t('اتصال خودکار', 'Auto-connect');
   String get autoConnectHint =>
       _t('با باز شدن برنامه وصل شو', 'Connect as soon as the app opens');
@@ -451,6 +486,7 @@ class LangNotifier extends AsyncNotifier<AppLang> {
   }
 
   Future<void> setLang(AppLang lang) async {
+    AppLog.instance.info('Setting changed', detail: 'language ${lang.name}');
     state = AsyncData(lang);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kLangKey, lang == AppLang.en ? 'en' : 'fa');

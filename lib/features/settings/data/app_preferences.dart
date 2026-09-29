@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../diagnostics/data/app_log.dart';
+
 /// The switches on the settings screen that actually do something.
 ///
 /// The design draws four: auto-connect, kill switch, split tunneling and local
@@ -50,6 +52,10 @@ class AppPreferencesController extends AsyncNotifier<AppPreferences> {
   }
 
   Future<void> setAutoConnect(bool value) async {
+    // Logged, because half of "it connects on its own" and "it never connects
+    // on its own" is a switch nobody remembers touching.
+    AppLog.instance.info('Setting changed',
+        detail: 'auto-connect ${value ? 'on' : 'off'}');
     // Published before the write, so the switch moves under the finger rather
     // than after a round trip to disk.
     state = AsyncData((state.valueOrNull ?? const AppPreferences())
@@ -63,6 +69,8 @@ class AppPreferencesController extends AsyncNotifier<AppPreferences> {
   }
 
   Future<void> setShareResults(bool value) async {
+    AppLog.instance.info('Setting changed',
+        detail: 'share results ${value ? 'on' : 'off'}');
     state = AsyncData((state.valueOrNull ?? const AppPreferences())
         .copyWith(shareResults: value));
     try {

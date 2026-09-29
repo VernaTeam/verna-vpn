@@ -121,6 +121,16 @@ class UserSubscriptionsController extends Notifier<UserSubscriptionsState> {
       items: items,
       refreshing: {...state.refreshing}..remove(id),
     );
+    // The URL itself is never logged: a personal subscription link is a
+    // credential. How many servers came back is the part that explains a
+    // shrinking list.
+    if (fetched.problem != null) {
+      AppLog.instance.warn('Subscription refresh failed',
+          detail: fetched.problem!.name);
+    } else {
+      AppLog.instance.info('Subscription refreshed',
+          detail: '${fetched.parsed!.uris.length} servers');
+    }
     await UserSubscriptionStore.write(items);
   }
 
@@ -131,6 +141,7 @@ class UserSubscriptionsController extends Notifier<UserSubscriptionsState> {
   }
 
   Future<void> remove(String id) async {
+    AppLog.instance.info('Subscription removed');
     final items = [
       for (final sub in state.items)
         if (sub.id != id) sub,

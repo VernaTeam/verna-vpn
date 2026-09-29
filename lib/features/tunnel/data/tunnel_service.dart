@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:flutter_singbox_client/flutter_singbox_client.dart';
 
 import '../../configs/domain/vpn_config.dart';
@@ -99,6 +100,24 @@ class TunnelService {
   /// The network (ASN) the phone was last measured on outside the tunnel,
   /// for labelling the list's own test results.
   String? lastAsn;
+
+  /// Which network the phone's own memory of good servers is filed under.
+  ///
+  /// Not the same thing as the ASN sent with a report, and deliberately so.
+  /// A report must carry only a measured network or none at all (§40: an
+  /// Iranian SIM filed as OVH France 440 times, because the reading had
+  /// travelled through the tunnel that was being replaced). This key never
+  /// leaves the phone, so it may fall back to the last network that *was*
+  /// measured.
+  ///
+  /// Why it has to: right after a disconnect, Android keeps the old VPN
+  /// network alive for seconds, so the pre-connect reading is skipped and the
+  /// network reads as `unknown`. [KnownGoodStore] matches the key exactly, so
+  /// the reconnect found nothing remembered, skipped the shortcut, and picked
+  /// from a cold sweep -- which is how "the first connection is fast and the
+  /// one after a disconnect is slow" happened.
+  String? _lastMeasuredNetwork;
+  String _memoryKey = 'unknown';
 
   /// Latest urltest results, keyed by outbound tag. Only delays above zero:
   /// the core reports 0 for an outbound it could not reach.
@@ -317,7 +336,27 @@ class TunnelService {
         previous != ServiceState.started &&
         _snapshot.phase == TunnelPhase.idle &&
         !_testing) {
-      unawaited(_adopt());
+      // Unless the user just switched it off.
+      //
+      // Reported on 2026-09-29: "sometimes I press disconnect and it connects
+      // again by itself". The service can report `started` after the stop --
+      // the plugin's command client re-attaches asynchronously and its
+      // `onConnected` sets STATE_STARTED (the same late-arrival that §40's
+      // restore had to learn to wait for). Arriving here after a deliberate
+      // disconnect, it looked exactly like a tunnel that had surfaced late,
+      // and the app adopted it. The stopped branch above already knew about
+      // `_cancelled`; this one did not.
+      //
+      // So: stop it rather than adopt it. The user asked for off, and a core
+      // still reporting started after that is something to shut down, not to
+      // show as a connection.
+      if (_cancelled) {
+        _log.info('Service reported started after a disconnect',
+            detail: 'stopping it instead of adopting it');
+        unawaited(_stop());
+      } else {
+        unawaited(_adopt());
+      }
     }
   }
 
@@ -348,6 +387,9 @@ class TunnelService {
   /// Re-examines a running tunnel after the network underneath it changed.
   Future<void> _onNetworkChange(NetworkChange change) async {
     if (!change.invalidatesTunnel) return;
+    // The phone is somewhere else now, so the remembered key is not a safe
+    // stand-in any more: the next connect measures or goes to `unknown`.
+    _lastMeasuredNetwork = null;
     if (_snapshot.phase != TunnelPhase.connected) return;
     if (_recovering || _testing) return;
 
@@ -637,6 +679,14 @@ class TunnelService {
     _lastCandidates = candidates;
     _lastUserChose = userChose;
     _lastPreferredCountry = preferredCountry;
+    // Every attempt opens with one line, so the log can be read as a story:
+    // this is where an attempt began, and everything under it belongs to it.
+    _log.info(
+      'Connect requested',
+      detail: '${candidates.length} candidates · '
+          '${preferredCountry ?? 'any country'} · '
+          '${userChose ? 'user choice' : 'automatic'}',
+    );
     // Named in the log, because the row a finger lands on is not always the
     // row the eye picked -- and "it failed" is only a useful report once it
     // is certain which server failed.
@@ -656,6 +706,7 @@ class TunnelService {
       // without the provider's fetch -- and would otherwise spend its egress
       // and reachability timeouts discovering the same thing.
       if (!await NetworkStatus.hasInternet()) {
+        _log.warn('Connect stopped', detail: 'the phone has no internet');
         _emit(const TunnelSnapshot(
           phase: TunnelPhase.failed,
           failure: TunnelFailure.noInternet,
@@ -664,6 +715,7 @@ class TunnelService {
       }
 
       if (!await _client.requestVPNPermission()) {
+        _log.warn('Connect stopped', detail: 'VPN permission was not granted');
         _emit(const TunnelSnapshot(
           phase: TunnelPhase.failed,
           failure: TunnelFailure.permissionDenied,
@@ -695,9 +747,29 @@ class TunnelService {
       final foreignVpn = _state == ServiceState.stopped &&
           !justStopped &&
           await NetworkStatus.vpnActive() == true;
-      final before = await _readEgress(timeout: const Duration(seconds: 6));
+      // Measured only once the previous tunnel's network is really gone.
+      //
+      // Android keeps a VPN network alive for seconds after the core stops, so
+      // a reading taken right after a teardown travels through the tunnel that
+      // just died. Two things went wrong because of that, both found from the
+      // outside: the reported `asn` was the old exit -- an Iranian SIM filed
+      // AS16276 (OVH France) 440 times, which the bot session spotted in
+      // reports.db -- and `_verifyEgress` then compared the new tunnel against
+      // that same exit and rejected working servers with "address unchanged".
+      final canMeasure = await _awaitNoVpn(const Duration(seconds: 5));
+      final before = canMeasure
+          ? await _readEgress(timeout: const Duration(seconds: 6))
+          : null;
       final network = before?.network ?? 'unknown';
-      if (before?.network != null) lastAsn = before!.network;
+      if (before?.network != null) {
+        lastAsn = before!.network;
+        _lastMeasuredNetwork = before.network;
+      }
+      _memoryKey = before?.network ?? _lastMeasuredNetwork ?? 'unknown';
+      if (!canMeasure && _lastMeasuredNetwork != null) {
+        _log.info('Using the last known network',
+            detail: '$_memoryKey, for this phone\'s own server memory');
+      }
 
       // Servers this phone has already connected through on this network, in
       // front of everything. A connection used to begin by rediscovering the
@@ -706,7 +778,7 @@ class TunnelService {
       // answered ten minutes earlier and thrown away when the process ended.
       final remembered = userChose
           ? const <KnownGood>[]
-          : await KnownGoodStore.forNetwork(network);
+          : await KnownGoodStore.forNetwork(_memoryKey);
       final wanted = preferredCountry?.toUpperCase();
       final rememberedConfigs = [
         for (final entry in remembered)
@@ -871,6 +943,36 @@ class TunnelService {
       total: total,
     ));
 
+    // Each probe's own failure, kept for the log. "No answer through the
+    // tunnel" was all a rejected server ever said, and it covers causes with
+    // different fixes: names that will not resolve inside the tunnel, a route
+    // that swallows connections, a TLS error.
+    final failures = <String>[];
+
+    // The proxy check comes first, and no VPN interface is requested until it
+    // passes. A server that cannot carry an HTTP request through a local port
+    // will not carry the phone's traffic either, and finding that out this way
+    // costs no TUN, no route, and no key in the status bar.
+    if (_cancelled) return false;
+    final viaProxy = await _checkThroughProxy(config, failures);
+    final proxyVerdict = _verifyEgress(before, viaProxy, config);
+    if (viaProxy == null || proxyVerdict != null) {
+      _log.warn('Server did not answer through a proxy',
+          detail: [
+            proxyVerdict ?? 'no answer',
+            if (failures.isNotEmpty) failures.join('; '),
+          ].join(' -- '));
+      await KnownGoodStore.forget(config.id, _memoryKey);
+      onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.noTraffic,
+          null, network == 'unknown' ? null : network);
+      return false;
+    }
+    if (_cancelled) return false;
+    _log.good('Server answered a proxy check',
+        detail: '${viaProxy.ip}${viaProxy.country == null ? '' : ' (${viaProxy.country})'}'
+            ' -- bringing the tunnel up');
+    failures.clear();
+
     if (!await _startTunnel(config)) {
       await _stop();
       return false;
@@ -882,11 +984,6 @@ class TunnelService {
     await Future<void>.delayed(_tunnelSettle);
     if (_cancelled) return false;
 
-    // Each probe's own failure, kept for the log. "No answer through the
-    // tunnel" was all a rejected server ever said, and it covers causes with
-    // different fixes: names that will not resolve inside the tunnel, a route
-    // that swallows connections, a TLS error.
-    final failures = <String>[];
     final after = await _readEgress(timeout: _verifyBudget, failures: failures);
     final verdict = _verifyEgress(before, after, config);
     if (verdict != null || after == null) {
@@ -904,7 +1001,7 @@ class TunnelService {
           ].join(' -- '));
       // A remembered server that has stopped working must not keep being
       // tried first, or the shortcut becomes the slow path.
-      await KnownGoodStore.forget(config.id, network);
+      await KnownGoodStore.forget(config.id, _memoryKey);
       onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.noTraffic,
           null, network == 'unknown' ? null : network);
       await _stop();
@@ -914,7 +1011,7 @@ class TunnelService {
     final latency = await _measureLatency();
     final pingMs = latency ?? (probeMs > 0 ? probeMs : null);
 
-    await KnownGoodStore.remember(config, network, milliseconds: pingMs);
+    await KnownGoodStore.remember(config, _memoryKey, milliseconds: pingMs);
     onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.alive,
         pingMs, network == 'unknown' ? null : network);
 
@@ -983,6 +1080,13 @@ class TunnelService {
   }
 
   Future<void> disconnect() async {
+    // With how long it lasted: a session that ends after four seconds and one
+    // that ends after four hours are different stories, and only the log
+    // remembers which it was.
+    final up = _connectedAt == null
+        ? 'was not connected'
+        : 'after ${DateTime.now().difference(_connectedAt!).inSeconds}s';
+    _log.info('Disconnect requested', detail: up);
     _cancelled = true;
     // Forget the request, so a network change after a deliberate disconnect
     // does not helpfully bring the tunnel back up.
@@ -1032,9 +1136,12 @@ class TunnelService {
     await _ensureInitialized();
 
     // Which network these results are about, for the reports. Read while no
-    // tunnel is up, and cheap next to the run itself.
-    final here = await _readEgress(timeout: const Duration(seconds: 6));
-    if (here?.network != null) lastAsn = here!.network;
+    // tunnel is up -- including the ghost network a teardown leaves behind,
+    // which would label this run with the last tunnel's exit.
+    final here = await _awaitNoVpn(const Duration(seconds: 5))
+        ? await _readEgress(timeout: const Duration(seconds: 6))
+        : null;
+    lastAsn = here?.network;
 
     final reachable = (await _reachable(subject)).toSet();
     _log.info('Reachability filter',
@@ -1187,6 +1294,25 @@ class TunnelService {
   /// somewhere else. Where the server's own country is known, the exit has to
   /// match it; where it is not, the exit merely has to be somewhere other than
   /// where the phone started.
+  /// Waits until Android reports no VPN network at all, up to [limit].
+  ///
+  /// False means one is still up, and therefore that anything measured now
+  /// would describe that tunnel's path rather than this phone's network. The
+  /// caller's job is then to record nothing rather than to record the wrong
+  /// thing: an unmeasured network and a measured one must not look alike.
+  Future<bool> _awaitNoVpn(Duration limit) async {
+    final deadline = DateTime.now().add(limit);
+    while (true) {
+      if (await NetworkStatus.vpnActive() != true) return true;
+      if (!DateTime.now().isBefore(deadline)) {
+        _log.warn('Egress reading skipped',
+            detail: 'a VPN network is still up; it would measure that path');
+        return false;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+  }
+
   String? _verifyEgress(_Egress? before, _Egress? after, VpnConfig config) {
     if (after == null) return 'no answer through the tunnel';
 
@@ -1244,6 +1370,58 @@ class TunnelService {
       if (past && DateTime.now().difference(lastChange) > _settleWindow) return;
 
       await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+  }
+
+  /// Asks one server, through a local proxy, where traffic comes out.
+  ///
+  /// No TUN, so no VPN key in the status bar, and nothing for Android to tear
+  /// down if the answer is no. A candidate that fails here is rejected before
+  /// a VPN interface is ever requested, which is both quieter and cheaper: a
+  /// dead server used to cost a full interface setup and teardown.
+  ///
+  /// The reading still has to satisfy [_verifyEgress] afterwards. This says
+  /// the server carries traffic and resolves names; only the tunnel itself
+  /// can say that the phone's whole route does.
+  Future<_Egress?> _checkThroughProxy(
+    VpnConfig config,
+    List<String> failures,
+  ) async {
+    final outbound = SingboxOutbound.fromConfig(config, 'proxy');
+    if (outbound == null) {
+      failures.add('config could not be converted');
+      return null;
+    }
+    final json = _checkConfig(outbound);
+    try {
+      await _awaitPortFree();
+      await _client.checkConfig(json);
+      await _client.connect(SessionOptions(
+        config: json,
+        networkMode: NetworkMode.proxy,
+        notification: const NotificationConfig(
+          title: 'Verna VPN',
+          channelName: 'VPN service',
+          showTrafficStats: false,
+          showStopButton: false,
+        ),
+      ));
+      if (!await _awaitState(ServiceState.started, seconds: 12)) {
+        failures.add('the core did not start for the check');
+        return null;
+      }
+      return await _readEgress(
+        timeout: _verifyBudget,
+        failures: failures,
+        viaProxyPort: _probePort,
+      );
+    } catch (e) {
+      failures.add('check failed: $e');
+      return null;
+    } finally {
+      // Always: the tunnel that may follow needs this port, and a check
+      // session left running would hold it.
+      await _stop();
     }
   }
 
@@ -1352,7 +1530,10 @@ class TunnelService {
       'log': {'level': 'error'},
       'inbounds': [
         {
-          'type': 'socks',
+          // Mixed, not socks: the same port has to serve the core's own
+          // urltest and the egress check, and Dart's HttpClient speaks HTTP
+          // proxy, not SOCKS.
+          'type': 'mixed',
           'tag': 'in',
           'listen': '127.0.0.1',
           'listen_port': _probePort,
@@ -1379,6 +1560,86 @@ class TunnelService {
     });
   }
 
+  /// The resolver, shared by the tunnel and by the proxy-mode check that now
+  /// precedes it.
+  ///
+  /// One copy on purpose: the check exists to answer "will this server work",
+  /// and a check that resolved names differently from the tunnel would be
+  /// answering a different question. Everything here was learned the hard way
+  /// in VPN mode -- see the notes inside.
+  Map<String, dynamic> _dnsSection() => {
+          // The 1.12 server format, not the `address:` one every share-config
+          // tutorial still shows: sing-box 1.14 removed the legacy shape and
+          // refuses the whole config over it, which surfaced here as a tunnel
+          // that reported "the server didn't respond" without contacting one.
+          'servers': [
+            // DNS over HTTPS, on port 443.
+            //
+            // Two wrong answers came before this one. UDP needs the outbound to
+            // relay UDP, and most free configs here are TCP-only, so every
+            // query vanished. DoT fixed that but asks for port 853, and the
+            // core's log showed those connections timing out at 5 and 10
+            // seconds -- these proxies carry 443 and little else.
+            //
+            // DoH is the shape that matches what a censored network already
+            // permits: it is a TCP connection to port 443 carrying what looks
+            // like ordinary web traffic, which is precisely what the proxy
+            // exists to move.
+            {
+              'tag': 'remote',
+              'type': 'https',
+              'server': '1.1.1.1',
+              'detour': 'proxy',
+            },
+            // No detour: naming the direct outbound explicitly is rejected by
+            // 1.14 ("detour to an empty direct outbound makes no sense"), and
+            // direct is what a server without one does anyway.
+            {'tag': 'local', 'type': 'udp', 'server': '8.8.8.8'},
+            // The phone's own resolver, for one job only: finding the proxy
+            // server itself. See default_domain_resolver below.
+            {'tag': 'system', 'type': 'local'},
+          ],
+          // Resolved through the tunnel, so name lookups cannot leak to a
+          // resolver that is being tampered with locally.
+          'final': 'remote',
+          'strategy': 'ipv4_only',
+      };
+
+  /// A proxy-mode config for one server: the same outbound and the same
+  /// resolver as the tunnel, reached through a local port instead of a TUN.
+  ///
+  /// This is what lets a candidate be checked before Android is asked for a
+  /// VPN interface. Meysam, 2026-09-29: the key in the status bar means "a
+  /// VPN is up" in every other app, and Verna was showing it while it was
+  /// still looking for a server.
+  String _checkConfig(Map<String, dynamic> outbound) {
+    return jsonEncode({
+      'log': {'level': 'warn'},
+      'dns': _dnsSection(),
+      'inbounds': [
+        {
+          'type': 'mixed',
+          'tag': 'in',
+          'listen': '127.0.0.1',
+          'listen_port': _probePort,
+        }
+      ],
+      'outbounds': [
+        outbound,
+        {'type': 'direct', 'tag': 'direct'},
+      ],
+      'route': {
+        'auto_detect_interface': true,
+        // As in the tunnel: the proxy's own address is found with the system
+        // resolver, everything else through the proxy.
+        'default_domain_resolver': 'system',
+        'rules': [
+          {'inbound': 'in', 'outbound': 'proxy'},
+        ],
+      },
+    });
+  }
+
   /// A VPN-mode config for one chosen server.
   String _tunnelConfig(Map<String, dynamic> outbound, VpnConfig config) {
     return jsonEncode({
@@ -1386,43 +1647,7 @@ class TunnelService {
       // tunnel is not always logged at error level, and the core's own account
       // of it is what tells a resolver problem apart from a dead server.
       'log': {'level': 'warn'},
-      'dns': {
-        // The 1.12 server format, not the `address:` one every share-config
-        // tutorial still shows: sing-box 1.14 removed the legacy shape and
-        // refuses the whole config over it, which surfaced here as a tunnel
-        // that reported "the server didn't respond" without contacting one.
-        'servers': [
-          // DNS over HTTPS, on port 443.
-          //
-          // Two wrong answers came before this one. UDP needs the outbound to
-          // relay UDP, and most free configs here are TCP-only, so every
-          // query vanished. DoT fixed that but asks for port 853, and the
-          // core's log showed those connections timing out at 5 and 10
-          // seconds -- these proxies carry 443 and little else.
-          //
-          // DoH is the shape that matches what a censored network already
-          // permits: it is a TCP connection to port 443 carrying what looks
-          // like ordinary web traffic, which is precisely what the proxy
-          // exists to move.
-          {
-            'tag': 'remote',
-            'type': 'https',
-            'server': '1.1.1.1',
-            'detour': 'proxy',
-          },
-          // No detour: naming the direct outbound explicitly is rejected by
-          // 1.14 ("detour to an empty direct outbound makes no sense"), and
-          // direct is what a server without one does anyway.
-          {'tag': 'local', 'type': 'udp', 'server': '8.8.8.8'},
-          // The phone's own resolver, for one job only: finding the proxy
-          // server itself. See default_domain_resolver below.
-          {'tag': 'system', 'type': 'local'},
-        ],
-        // Resolved through the tunnel, so name lookups cannot leak to a
-        // resolver that is being tampered with locally.
-        'final': 'remote',
-        'strategy': 'ipv4_only',
-      },
+      'dns': _dnsSection(),
       'inbounds': [
         {
           'type': 'tun',
@@ -1556,6 +1781,7 @@ class TunnelService {
   Future<_Egress?> _readEgress({
     required Duration timeout,
     List<String>? failures,
+    int? viaProxyPort,
   }) async {
     // The comment above always described this; the code did not. It used
     // Future.wait, which returns when the *last* probe finishes -- and one
@@ -1578,6 +1804,16 @@ class TunnelService {
         receiveTimeout: timeout,
         responseType: ResponseType.plain,
       ));
+      if (viaProxyPort != null) {
+        // Through the core's own listener, so the reading travels the server
+        // being checked without a TUN. The name is resolved at the far end --
+        // an HTTP proxy is asked for a host, not an address -- which is the
+        // same lookup the tunnel would have to do.
+        dio.httpClientAdapter = IOHttpClientAdapter(
+          createHttpClient: () => HttpClient()
+            ..findProxy = (_) => 'PROXY 127.0.0.1:$viaProxyPort',
+        );
+      }
       clients.add(dio);
       dio.get<String>(url).then<void>((res) {
         final reading = _parseEgress(res.data ?? '');

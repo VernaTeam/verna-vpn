@@ -5,6 +5,7 @@ import 'core/l10n/app_strings.dart';
 import 'core/theme/palette.dart';
 import 'features/configs/presentation/screens/settings_screen.dart';
 import 'features/configs/presentation/widgets/auto_test_runner.dart';
+import 'features/update/presentation/update_gate.dart';
 import 'features/stats/presentation/screens/usage_screen.dart';
 import 'features/subscriptions/presentation/subscriptions_screen.dart';
 import 'features/tunnel/presentation/screens/locations_screen.dart';
@@ -62,8 +63,11 @@ class _AppShellState extends ConsumerState<AppShell> {
     final index = ref.watch(shellTabProvider);
     _visited.add(index);
 
-    return AutoTestRunner(
-      child: Scaffold(
+    // The update offer sits outside the runner and inside the shell: it needs
+    // a screen to raise a dialog over, and it has nothing to do with testing.
+    return UpdateGate(
+      child: AutoTestRunner(
+        child: Scaffold(
         backgroundColor: c.background,
         // The design floats the bar over the content, with every scroll area
         // padded by 92 to clear it. Here the bar takes its own space instead:
@@ -88,6 +92,7 @@ class _AppShellState extends ConsumerState<AppShell> {
             strings.tabSubscriptions,
             strings.settings,
           ],
+        ),
         ),
       ),
     );

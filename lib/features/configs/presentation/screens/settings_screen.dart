@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../app_shell.dart';
+import '../../../../core/app_version.dart';
 import '../../../../core/l10n/app_strings.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/palette.dart';
@@ -10,6 +11,8 @@ import '../../../settings/data/app_preferences.dart';
 import '../../../stats/data/usage_store.dart';
 import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
 import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
+import '../../../update/data/update_checker.dart';
+import '../../../update/presentation/update_gate.dart';
 import '../../data/config_actions.dart';
 
 /// Settings, to the design's layout.
@@ -24,11 +27,41 @@ import '../../data/config_actions.dart';
 /// worse than a missing feature -- and on a kill switch, which exists to
 /// promise that traffic stops when the tunnel does, it is the one place a
 /// decorative control could actually get someone hurt.
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen> {
+  /// True while the update check is in flight, so the row can say so and not
+  /// be pressed a second time.
+  bool _checking = false;
+
+  /// Asks GitHub, and answers either way.
+  ///
+  /// The launch check is allowed to stay silent; this one is not. Somebody
+  /// pressed a button, and a button that sometimes does nothing visible is
+  /// indistinguishable from a broken one.
+  Future<void> _checkForUpdates(S s) async {
+    setState(() => _checking = true);
+    final result = await UpdateChecker.check();
+    if (!mounted) return;
+    setState(() => _checking = false);
+    final messenger = ScaffoldMessenger.of(context);
+    final release = result.release;
+    if (release != null) {
+      await showUpdateDialog(context, ref, release);
+      return;
+    }
+    messenger.showSnackBar(SnackBar(
+      content: Text(result.reachable ? s.upToDate : s.updateCheckFailed),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final s = ref.watch(stringsProvider);
     final c = context.verna;
     final lang = ref.watch(langProvider).valueOrNull ?? AppLang.fa;
@@ -187,6 +220,22 @@ class SettingsScreen extends ConsumerWidget {
             ),
             const SizedBox(height: 10),
             _Row(
+              title: s.checkForUpdates,
+              subtitle: _checking ? s.checkingForUpdates : s.checkForUpdatesHint,
+              leading: Icon(Icons.system_update_alt_rounded,
+                  size: 20, color: c.textSecondary),
+              trailing: _checking
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(Icons.chevron_right_rounded,
+                      size: 20, color: c.textMuted),
+              onTap: _checking ? null : () => _checkForUpdates(s),
+            ),
+            const SizedBox(height: 10),
+            _Row(
               title: s.diagnostics,
               leading: Icon(Icons.monitor_heart_outlined,
                   size: 20, color: c.textSecondary),
@@ -220,7 +269,7 @@ class SettingsScreen extends ConsumerWidget {
             const SizedBox(height: 26),
             Center(
               child: Text(
-                'VERNA 1.0.0',
+                'VERNA $kAppVersion',
                 textDirection: TextDirection.ltr,
                 style: TextStyle(
                   color: c.textFaint,

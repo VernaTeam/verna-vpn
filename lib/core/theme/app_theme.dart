@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../features/diagnostics/data/app_log.dart';
 import 'palette.dart';
 
 class AppTheme {
@@ -101,6 +102,7 @@ class ThemeModeNotifier extends AsyncNotifier<ThemeMode> {
   }
 
   Future<void> setMode(ThemeMode mode) async {
+    AppLog.instance.info('Setting changed', detail: 'theme ${mode.name}');
     state = AsyncData(mode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kThemeKey, _toString(mode));

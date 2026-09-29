@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../../core/app_version.dart';
 import '../../../../core/l10n/app_strings.dart';
 import '../../../configs/data/config_actions.dart';
 
@@ -60,7 +61,7 @@ class AboutScreen extends ConsumerWidget {
           ListTile(
             leading: const Icon(Icons.tag_rounded),
             title: Text(s.version),
-            subtitle: const Text('1.0.0'),
+            subtitle: const Text(kAppVersion),
           ),
         ],
       ),

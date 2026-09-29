@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -12,19 +14,80 @@ import 'features/configs/presentation/screens/splash_screen.dart';
 import 'features/configs/presentation/screens/home_screen.dart';
 import 'features/configs/presentation/screens/settings_screen.dart';
 import 'features/about/presentation/screens/about_screen.dart';
+import 'features/diagnostics/data/app_log.dart';
 import 'features/diagnostics/presentation/diagnostics_screen.dart';
+import 'features/reports/data/measurement_report.dart';
 import 'features/settings/presentation/screens/plan_screen.dart';
 import 'features/subscriptions/presentation/subscriptions_screen.dart';
 import 'features/tunnel/presentation/screens/country_picker_screen.dart';
 import 'features/tunnel/presentation/screens/vpn_home_screen.dart';
 
-void main() {
-  WidgetsFlutterBinding.ensureInitialized();
+Future<void> main() async {
+  final binding = WidgetsFlutterBinding.ensureInitialized();
+
+  // Before anything else runs, so the log file covers the whole launch --
+  // including a failure during startup, which is the one no screen ever gets
+  // to show.
+  await AppLog.instance.attach(version: MeasurementReport.currentAppVersion);
+
+  // Crashes end up in the log too. Without this they went only to logcat,
+  // which needs a cable and a developer, and the user's report stayed "it
+  // just closed".
+  final flutterOnError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    AppLog.instance.error(
+      'Widget error: ${details.exceptionAsString()}',
+      detail: details.library == null ? null : 'in ${details.library}',
+    );
+    flutterOnError?.call(details);
+  };
+  binding.platformDispatcher.onError = (error, stack) {
+    AppLog.instance.error(
+      'Uncaught error: $error',
+      detail: _topFrames(stack),
+    );
+    // False: let the platform handle it as it would have. This listens, it
+    // does not swallow.
+    return false;
+  };
+  binding.addObserver(_LifecycleLog());
+
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
   runApp(const ProviderScope(child: VernaApp()));
+}
+
+/// The first few stack frames. A whole Dart stack is a screenful; the top of
+/// it is what says where the error came from.
+String _topFrames(StackTrace stack) => const LineSplitter()
+    .convert(stack.toString())
+    .where((l) => l.trim().isNotEmpty)
+    .take(4)
+    .join('\n');
+
+/// Records when the app went away and came back, and makes sure the log file
+/// is written before Android is free to kill the process.
+class _LifecycleLog with WidgetsBindingObserver {
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Only the transitions that matter. `inactive` fires for every passing
+    // notification shade and would bury the rest.
+    switch (state) {
+      case AppLifecycleState.resumed:
+        AppLog.instance.info('App resumed');
+      case AppLifecycleState.paused:
+        AppLog.instance.info('App backgrounded');
+        AppLog.instance.flush();
+      case AppLifecycleState.detached:
+        AppLog.instance.info('App closing');
+        AppLog.instance.flush();
+      case AppLifecycleState.inactive:
+      case AppLifecycleState.hidden:
+        break;
+    }
+  }
 }
 
 class VernaApp extends ConsumerWidget {

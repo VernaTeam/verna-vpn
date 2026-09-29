@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -39,6 +41,12 @@ class _AutoTestRunnerState extends ConsumerState<AutoTestRunner> {
   /// One or two late arrivals are not; three hundred are.
   static const int _minNewRows = 10;
 
+  /// How long a disconnect is left alone before the list is measured again.
+  /// Long enough to cover a reconnect the user is already reaching for.
+  static const Duration _disconnectGrace = Duration(seconds: 30);
+
+  Timer? _afterDisconnect;
+
   @override
   void initState() {
     super.initState();
@@ -78,6 +86,12 @@ class _AutoTestRunnerState extends ConsumerState<AutoTestRunner> {
   }
 
   @override
+  void dispose() {
+    _afterDisconnect?.cancel();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     // The moment there are rows, there is a run.
     ref.listen<List<VpnConfig>>(filteredConfigsProvider, (_, next) {
@@ -91,9 +105,33 @@ class _AutoTestRunnerState extends ConsumerState<AutoTestRunner> {
       if ((previous?.running ?? false) && !next.running) _run();
     });
 
-    // A tunnel that goes down is the first chance to measure since it came up.
+    // A tunnel that goes down is the first chance to measure since it came up
+    // -- but not immediately.
+    //
+    // Reported on 2026-09-29: the connection after a disconnect is slower
+    // than the first one. A disconnect is very often the first half of
+    // "somewhere else, please", and this listener used to start a full sweep
+    // of the inventory in the same instant. The reconnect then began against
+    // a phone already busy probing: the connect cancels the run, but the test
+    // only notices between batches (eight to fourteen seconds), which is the
+    // whole handshake and the first seconds of use -- and the probe timings
+    // the server is *chosen* by are measured in that traffic, so a slower
+    // server can win the comparison and keep the session for as long as it
+    // lasts.
+    //
+    // So the run waits, and a reconnect inside the pause cancels it. Nothing
+    // is lost: the sweep is for keeping the list's numbers fresh, and the
+    // list is not what the user is looking at while reconnecting.
     ref.listen(tunnelSnapshotProvider, (previous, next) {
-      if ((previous?.isConnected ?? false) && !next.isConnected) _run();
+      if ((previous?.isConnected ?? false) && !next.isConnected) {
+        _afterDisconnect?.cancel();
+        _afterDisconnect = Timer(_disconnectGrace, _run);
+      }
+      // Reconnected, or on the way: the pause has done its job.
+      if (next.isConnected || next.isBusy) {
+        _afterDisconnect?.cancel();
+        _afterDisconnect = null;
+      }
     });
 
     // `ref.listen` only reports changes, so a list that was already loaded
