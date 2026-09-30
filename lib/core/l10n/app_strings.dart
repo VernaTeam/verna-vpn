@@ -414,9 +414,11 @@ class S {
       _t('بررسی ممکن نشد', 'Could not check for updates');
   String updateAvailable(String version) =>
       _t('نسخه $version منتشر شده', 'Version $version is available');
-  String updateBody(String version) => _t(
-      'نسخه $version روی گیت‌هاب منتشر شده است. فایل مناسب گوشی شما در مرورگر باز می‌شود؛ دانلود و نصب با خودتان است.',
-      'Version $version is on GitHub. The file for your phone opens in your browser; downloading and installing it is up to you.');
+  // One line, in both languages. The dialog used to explain the whole
+  // mechanism -- which file, which browser, whose job the install is -- and
+  // Meysam cut it on 2026-09-30: the buttons already say what happens.
+  String updateBody(String version) =>
+      'Verna VPN $version is available on GitHub.';
   String get updateNow => _t('دریافت', 'Get it');
   String get notNow => _t('بعداً', 'Not now');
   String get openedInBrowser =>

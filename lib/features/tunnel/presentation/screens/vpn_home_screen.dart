@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../../app_shell.dart';
 import '../../../../core/l10n/app_strings.dart';
 import '../../../../core/theme/palette.dart';
-import '../../../configs/presentation/providers/configs_provider.dart';
 import '../../../configs/presentation/providers/local_test_provider.dart';
 import '../../../map/presentation/world_map.dart';
 import '../../../stats/data/protected_time_store.dart';
@@ -169,7 +168,7 @@ class _AuraHeader extends StatelessWidget {
 
   /// The two heights the sliver moves between.
   static const double openHeight = _auraHeight + _powerWell + 62;
-  static const double shutHeight = _auraCollapsed + _wellCollapsed + 42;
+  static const double shutHeight = _auraCollapsed + _wellCollapsed + 52;
 
   static double _at(double open, double shut, double t) =>
       open + (shut - open) * t;
@@ -184,7 +183,7 @@ class _AuraHeader extends StatelessWidget {
     final well = _at(_powerWell, _wellCollapsed, t);
     final button = _at(_buttonSize, _buttonCollapsed, t);
     final rise = _at(_buttonRise, _buttonCollapsed / 2, t);
-    final tail = _at(62, 42, t);
+    final tail = _at(62, 52, t);
     // The wordmark goes first: it is the least useful thing up there, and it
     // would otherwise end up sitting on the button as the dome closes in.
     final wordmark = (1 - t * 1.8).clamp(0.0, 1.0);
@@ -297,12 +296,28 @@ class _AuraHeader extends StatelessWidget {
                 onTap: onTap,
               ),
             ),
+            // Centred in the space it has, rather than placed at a fixed
+            // distance below the button.
+            //
+            // It used to be `aura + well + _at(16, 6, t)`, two numbers tuned
+            // for the open header. Collapsed, that left 5 px above the line
+            // and 18 below, so the status hugged the button and crowded the
+            // location card's title -- Meysam, 2026-09-30, with the line
+            // circled. Measuring from the ring's own bottom edge to the
+            // bottom of the header and centring in between gives an even gap
+            // at both ends, at any point of the collapse, and leaves the open
+            // header looking as it did.
             Positioned(
-              top: aura + well + _at(16, 6, t),
-              child: _StatusLine(
-                snapshot: snapshot,
-                strings: strings,
-                scale: _at(1, 0.82, t),
+              top: aura - rise + button + _PowerButton.ringInset,
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: _StatusLine(
+                  snapshot: snapshot,
+                  strings: strings,
+                  scale: _at(1, 0.82, t),
+                ),
               ),
             ),
           ],
@@ -881,12 +896,14 @@ class _MapCard extends ConsumerWidget {
     // Cyan only ever means protected. A country the app has merely been asked
     // to use is amber, and one that just failed is rose -- the design's rule,
     // applied to the states this app actually has. The user's own country is
-    // none of those: it is where they are, not a plan, so it stays idle grey.
-    final highlight = switch (snapshot.phase) {
-      TunnelPhase.connected => MapHighlight.connected,
-      TunnelPhase.failed => MapHighlight.failed,
-      _ => chosenCode == null ? MapHighlight.idle : MapHighlight.pending,
-    };
+    // none of those: it is where they are, not a plan, not a failure.
+    final highlight = showingOwn
+        ? MapHighlight.own
+        : switch (snapshot.phase) {
+            TunnelPhase.connected => MapHighlight.connected,
+            TunnelPhase.failed => MapHighlight.failed,
+            _ => chosenCode == null ? MapHighlight.idle : MapHighlight.pending,
+          };
 
     // 158 as the design has it, less on a short screen. The handoff's layout
     // "fits with no scrolling" on a 412 x 872 phone; on anything shorter --
@@ -909,8 +926,12 @@ class _MapCard extends ConsumerWidget {
                 countryCode: code,
                 highlight: highlight,
                 // Hidden mid-handshake: a pin on a country the app has not
-                // reached yet is a claim it cannot make.
-                pinVisible: !snapshot.isBusy,
+                // reached yet is a claim it cannot make. The user's own
+                // country is the exception -- it is true throughout, and
+                // blanking the map for the length of a handshake was worse
+                // than the claim the rule was written to prevent. Dimmed
+                // while busy, so it still reads as "working".
+                pinVisible: !snapshot.isBusy || showingOwn,
                 dimPin: snapshot.isBusy,
               ),
             ),
@@ -920,7 +941,8 @@ class _MapCard extends ConsumerWidget {
             // A country, or an address, or both. Automatic mode with nothing
             // chosen has no country to name -- and that is exactly the state
             // the user's own address belongs in.
-            if ((code != null || ownIp != null) && !snapshot.isBusy)
+            if ((code != null || ownIp != null) &&
+                (!snapshot.isBusy || showingOwn))
               PositionedDirectional(
                 start: 0,
                 end: 10,
@@ -1058,7 +1080,6 @@ class _MiniCardGrid extends ConsumerWidget {
     final c = context.verna;
     final protected = ref.watch(protectedTimeProvider);
     final results = ref.watch(localTestResultsProvider);
-    final pool = ref.watch(filteredConfigsProvider);
     final working = results.values.where((r) => r.works).length;
     final ping = results[snapshot.active?.id]?.milliseconds ?? snapshot.pingMs;
 
@@ -1104,9 +1125,12 @@ class _MiniCardGrid extends ConsumerWidget {
                   // The healthy count moved here when ping took its card.
                   // It is a fact about the list, and the protocol is the other
                   // one -- neither needed a card of its own.
+                  // Without the count when there is nothing to count: "617
+                  // Not tested yet" reads as a number of somethings that were
+                  // not tested, which is not what it means.
                   sub: working > 0
                       ? '$working ${strings.subHealthy}'
-                      : '${pool.length} ${strings.untestedYet}',
+                      : strings.untestedYet,
                   colour: c.textPrimary,
                 ),
               ),
@@ -1478,6 +1502,14 @@ class _SparkPainter extends CustomPainter {
   /// 16 KB/s. Under this the line stays flat rather than magnifying noise.
   static const double _floor = 16 * 1024;
 
+  /// How much of the box the lines may climb into.
+  ///
+  /// Not all of it: at full height a busy download drew straight through the
+  /// digits, and a number with a line across it is worse than no graph at all
+  /// («عداد جلو باشه و گراف اون پشت ... کمرنگ»). The top third is the
+  /// numbers' -- the graph lives under them and only grazes the second row.
+  static const double _ceiling = 0.62;
+
   @override
   void paint(Canvas canvas, Size size) {
     final baseline = Paint()
@@ -1504,7 +1536,8 @@ class _SparkPainter extends CustomPainter {
       final path = Path();
       for (var i = 0; i < values.length; i++) {
         final x = offset + step * i;
-        final y = size.height - (values[i] / peak).clamp(0.0, 1.0) * (size.height - 2);
+        final y = size.height -
+            (values[i] / peak).clamp(0.0, 1.0) * (size.height - 2) * _ceiling;
         if (i == 0) {
           path.moveTo(x, y);
         } else {
@@ -1517,16 +1550,16 @@ class _SparkPainter extends CustomPainter {
         ..close();
       canvas.drawPath(
         fill,
-        Paint()..color = colour.withValues(alpha: 0.10),
+        Paint()..color = colour.withValues(alpha: 0.09),
       );
       canvas.drawPath(
         path,
         Paint()
-          // Half-lit: it is behind two lines of text, and a bright line
-          // through a number costs more than the graph adds.
-          ..color = colour.withValues(alpha: 0.5)
+          // Faint: it is behind two lines of text, and a bright line through
+          // a number costs more than the graph adds.
+          ..color = colour.withValues(alpha: 0.3)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.4
+          ..strokeWidth = 1.3
           ..strokeJoin = StrokeJoin.round
           ..strokeCap = StrokeCap.round,
       );

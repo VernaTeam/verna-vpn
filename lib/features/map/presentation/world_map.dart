@@ -125,7 +125,14 @@ class WorldMap extends StatefulWidget {
 
 /// Cyan only ever means protected. Amber is "chosen, not proven"; rose is a
 /// country that was tried and failed.
-enum MapHighlight { idle, pending, connected, failed }
+/// What the pinned country means.
+///
+/// `own` is where the user is right now, shown before a tunnel and while one
+/// is being built. It needs its own entry because `idle` paints the country
+/// in the land colour -- invisible, which is what Meysam saw on 2026-09-30 --
+/// and because none of the other three is honest about it: cyan claims
+/// protection, amber claims a plan, rose claims a failure.
+enum MapHighlight { idle, own, pending, connected, failed }
 
 class _WorldMapState extends State<WorldMap>
     with TickerProviderStateMixin {
@@ -242,6 +249,10 @@ class _WorldMapState extends State<WorldMap>
                   MapHighlight.connected => c.mapHighlight,
                   MapHighlight.failed => c.danger,
                   MapHighlight.pending => c.warn,
+                  // Lifted off the land enough to read as a shape, and far
+                  // enough from cyan to never be mistaken for a tunnel.
+                  MapHighlight.own =>
+                    Color.lerp(c.mapLand, c.textMuted, 0.55)!,
                   MapHighlight.idle => c.mapLand,
                 },
               ),
@@ -357,6 +368,7 @@ class _MapPainter extends CustomPainter {
       MapHighlight.connected => highlightColour,
       MapHighlight.failed => highlightColour,
       MapHighlight.pending => highlightColour,
+      MapHighlight.own => highlightColour,
       MapHighlight.idle => highlightColour,
     };
     final alpha = dimPin ? 0.35 : 1.0;
