@@ -154,6 +154,22 @@ class ConfigApiClient {
     await _dio.post('/reports', data: {'reports': reports});
   }
 
+  /// Sessions and failed attempts. Separate from /reports because the config
+  /// bot reads the reports table for server ranking and that contract does
+  /// not move because this exists.
+  Future<void> postTelemetry({
+    required String installId,
+    required List<Map<String, dynamic>> sessions,
+    required List<Map<String, dynamic>> failures,
+  }) async {
+    if (sessions.isEmpty && failures.isEmpty) return;
+    await _dio.post('/telemetry', data: {
+      'install_id': installId,
+      'sessions': sessions,
+      'failures': failures,
+    });
+  }
+
   Future<ConfigStats> getStats() async {
     if (_useMock) return _mockStats();
     final res = await _dio.get('/configs/stats');

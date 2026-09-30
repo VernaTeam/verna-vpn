@@ -11,6 +11,7 @@ import '../../data/preferred_country_store.dart';
 import '../../data/tunnel_service.dart';
 import '../../data/network_status.dart';
 import '../../../reports/data/report_queue.dart';
+import '../../../telemetry/data/telemetry_sink.dart';
 import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
 import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
 import '../../domain/local_test.dart';
@@ -26,6 +27,19 @@ final tunnelServiceProvider = Provider<TunnelService>((ref) {
             stage: stage,
             asn: asn,
           );
+  // What the connection was like, for the telemetry tables. The service
+  // reports facts; the sink knows the transport, the SIM, the country and
+  // whether the user agreed to any of it being sent.
+  final telemetry = ref.read(telemetrySinkProvider);
+  service.onTunnelUp = (facts) => unawaited(telemetry.tunnelUp(facts));
+  service.onTunnelDown = (cause) => unawaited(telemetry.tunnelDown(cause));
+  service.onConnectFailed =
+      (facts) => unawaited(telemetry.connectFailed(facts));
+  ref.onDispose(() {
+    service.onTunnelUp = null;
+    service.onTunnelDown = null;
+    service.onConnectFailed = null;
+  });
   ref.onDispose(service.dispose);
   return service;
 });
@@ -70,7 +84,13 @@ class TunnelController extends Notifier<TunnelSnapshot> {
   @override
   TunnelSnapshot build() {
     final service = ref.watch(tunnelServiceProvider);
-    final sub = service.updates.listen((snapshot) => state = snapshot);
+    final telemetry = ref.read(telemetrySinkProvider);
+    final sub = service.updates.listen((snapshot) {
+      state = snapshot;
+      // Byte totals and the peak rate for the open session, from the same
+      // once-a-second stream the speed card reads.
+      telemetry.observe(snapshot);
+    });
     ref.onDispose(sub.cancel);
     // A restored tunnel that stopped carrying traffic is replaced the way it
     // was made: the hand-picked server again, or a fresh automatic search.
@@ -91,6 +111,12 @@ class TunnelController extends Notifier<TunnelSnapshot> {
       // Reports queued in an earlier session go out now if no tunnel is
       // up -- on the phone's own network (see ReportSink.flush).
       await ref.read(reportSinkProvider).flush();
+      // A session the last run never got to finish -- Android killed the app
+      // while the tunnel was up -- is closed and sent now. Without this the
+      // data would only ever contain sessions that ended tidily.
+      final telemetry = ref.read(telemetrySinkProvider);
+      await telemetry.recoverAbandoned();
+      await telemetry.flush();
     });
     return service.snapshot;
   }

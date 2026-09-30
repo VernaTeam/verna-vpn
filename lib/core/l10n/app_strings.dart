@@ -135,14 +135,34 @@ class S {
   String get subStripMine => _t('ساب شما', 'yours');
   String get shareResults =>
       _t('ارسال ناشناس نتیجه‌ی تست‌ها', 'Share test results anonymously');
+  // Rewritten on 2026-10-01, when sessions joined server results. A switch
+  // whose description is out of date is worse than no description: the user
+  // agreed to something narrower than what now happens.
   String get shareResultsHint => _t(
-        'اینکه کدام سرورهای ورنا روی این گوشی کار کردند، بدون IP و بدون '
-            'مشخصات دستگاه، تا سرورهای خراب برای همه عقب بروند. ساب‌های خودتان '
-            'هرگز فرستاده نمی‌شوند.',
-        "Which of Verna's servers worked on this phone — no IP, nothing that "
-            'identifies the device — so broken ones sink for everyone. Your own '
-            'subscriptions are never sent.',
+        'اینکه کدام سرورها روی این گوشی کار کردند، هر اتصال چقدر طول کشید و '
+            'چقدر مصرف داشت، و اتصال‌های ناموفق با دلیلشان — بدون IP، بدون '
+            'موقعیت دقیق، و بدون هیچ ردی از اینکه داخل تونل چه کردید. '
+            'ساب‌های خودتان هرگز فرستاده نمی‌شوند.',
+        'Which servers worked on this phone, how long each connection lasted '
+            'and how much it moved, and failed attempts with their reason — no '
+            'IP, no precise location, and nothing about what you did inside the '
+            'tunnel. Your own subscriptions are never sent.',
       );
+
+  String get anonId =>
+      _t('شناسه ناشناس این نصب', 'Anonymous id for this install');
+  String get anonIdHint => _t(
+        'یک عدد تصادفی که فقط برای کنار هم گذاشتن گزارش‌های همین نصب به کار '
+            'می‌رود. از مشخصات گوشی ساخته نشده. با صفر کردن آن، گزارش‌های قبلی '
+            'دیگر به گزارش‌های بعدی وصل نمی‌شوند.',
+        'A random number, used only to group the reports from this install. '
+            'Not '
+            'derived from anything about the phone. Resetting it makes earlier '
+            'reports unlinkable from later ones.',
+      );
+  String get resetAnonId => _t('صفر کردن', 'Reset');
+  String get anonIdReset => _t('شناسه جدید ساخته شد', 'A new id was made');
+
   String get statData => _t('داده', 'Data');
   String get securelyConnected =>
       _t('اتصال شما امن است', 'You are securely connected');

@@ -11,6 +11,8 @@ import '../../../settings/data/app_preferences.dart';
 import '../../../stats/data/usage_store.dart';
 import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
 import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
+import '../../../../core/install_id.dart';
+import '../../../telemetry/data/telemetry_sink.dart';
 import '../../../update/data/update_checker.dart';
 import '../../../update/presentation/update_gate.dart';
 import '../../data/config_actions.dart';
@@ -38,12 +40,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// True while the update check is in flight, so the row can say so and not
   /// be pressed a second time.
   bool _checking = false;
+  bool _resettingId = false;
 
   /// Asks GitHub, and answers either way.
   ///
   /// The launch check is allowed to stay silent; this one is not. Somebody
   /// pressed a button, and a button that sometimes does nothing visible is
   /// indistinguishable from a broken one.
+  /// Throws away the id this install reports under and makes a new one.
+  ///
+  /// Anything already queued goes with it: those rows were measured under the
+  /// old id, and sending them under the new one would defeat the reset.
+  Future<void> _resetAnonId(S s) async {
+    setState(() => _resettingId = true);
+    await InstallId.reset();
+    await ref.read(telemetryQueueProvider).clear();
+    if (!mounted) return;
+    setState(() => _resettingId = false);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(s.anonIdReset)));
+  }
+
   Future<void> _checkForUpdates(S s) async {
     setState(() => _checking = true);
     final result = await UpdateChecker.check();
@@ -169,6 +186,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                 onChanged: (value) => ref
                     .read(appPreferencesProvider.notifier)
                     .setShareResults(value),
+              ),
+            ),
+            const SizedBox(height: 10),
+            // Beside the switch it belongs to: the id only exists because of
+            // what that switch sends, and a reset is the strongest control the
+            // user has over it short of switching sharing off.
+            _Row(
+              title: s.anonId,
+              subtitle: s.anonIdHint,
+              leading: Icon(Icons.fingerprint_rounded,
+                  size: 20, color: c.textSecondary),
+              trailing: TextButton(
+                onPressed: _resettingId ? null : () => _resetAnonId(s),
+                child: Text(s.resetAnonId),
               ),
             ),
             const SizedBox(height: 10),

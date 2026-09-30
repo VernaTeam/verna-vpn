@@ -10,6 +10,8 @@ import 'package:flutter_singbox_client/flutter_singbox_client.dart';
 import '../../configs/domain/vpn_config.dart';
 import '../../diagnostics/data/app_log.dart';
 import '../../reports/data/measurement_report.dart';
+import '../../telemetry/domain/telemetry_records.dart';
+import '../../telemetry/domain/tunnel_facts.dart';
 import '../domain/local_test.dart';
 import '../domain/tunnel_snapshot.dart';
 import 'candidate_selector.dart';
@@ -96,6 +98,22 @@ class TunnelService {
     int? ms,
     String? asn,
   )? onTunnelResult;
+
+  /// Told what a connection was like, so the telemetry layer can record it.
+  ///
+  /// Facts only: which server, how long it took, what was measured. What
+  /// transport carried it, which SIM was in the phone and whether the user
+  /// agreed to share any of it are not this layer's business -- see
+  /// TelemetrySink.
+  void Function(TunnelUpFacts facts)? onTunnelUp;
+  void Function(EndedBy cause)? onTunnelDown;
+  void Function(TunnelFailedFacts facts)? onConnectFailed;
+
+  /// When the current connect began, and how many servers it has tried.
+  /// Both describe the attempt as a whole, which is what a user experiences --
+  /// not the candidate that happened to succeed.
+  DateTime? _connectStartedAt;
+  int _attemptsMade = 0;
 
   /// The network (ASN) the phone was last measured on outside the tunnel,
   /// for labelling the list's own test results.
@@ -323,6 +341,7 @@ class TunnelService {
         _snapshot.phase == TunnelPhase.connected &&
         !_cancelled) {
       _log.info('Tunnel ended', detail: 'stopped outside the app');
+      onTunnelDown?.call(EndedBy.coreDied);
       _connectedAt = null;
       unawaited(ActiveSessionStore.clear());
       _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
@@ -413,12 +432,14 @@ class TunnelService {
       if (_lastCandidates.isEmpty) {
         _log.warn('Tunnel lost with the network',
             detail: 'nothing to rebuild from');
+        onTunnelDown?.call(EndedBy.network);
         await _stop();
         _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
         return;
       }
 
       _log.warn('Tunnel died with the network', detail: 'rebuilding');
+      onTunnelDown?.call(EndedBy.network);
     } finally {
       _recovering = false;
     }
@@ -681,6 +702,8 @@ class TunnelService {
     _lastPreferredCountry = preferredCountry;
     // Every attempt opens with one line, so the log can be read as a story:
     // this is where an attempt began, and everything under it belongs to it.
+    _connectStartedAt = DateTime.now();
+    _attemptsMade = 0;
     _log.info(
       'Connect requested',
       detail: '${candidates.length} candidates · '
@@ -707,6 +730,7 @@ class TunnelService {
       // and reachability timeouts discovering the same thing.
       if (!await NetworkStatus.hasInternet()) {
         _log.warn('Connect stopped', detail: 'the phone has no internet');
+        _reportFailure(FailReason.noInternet);
         _emit(const TunnelSnapshot(
           phase: TunnelPhase.failed,
           failure: TunnelFailure.noInternet,
@@ -716,6 +740,7 @@ class TunnelService {
 
       if (!await _client.requestVPNPermission()) {
         _log.warn('Connect stopped', detail: 'VPN permission was not granted');
+        _reportFailure(FailReason.permissionDenied);
         _emit(const TunnelSnapshot(
           phase: TunnelPhase.failed,
           failure: TunnelFailure.permissionDenied,
@@ -733,6 +758,7 @@ class TunnelService {
       final usable =
           candidates.where((c) => tunnelableTypes.contains(c.type)).toList();
       if (usable.isEmpty) {
+        _reportFailure(FailReason.noCandidates);
         _emit(const TunnelSnapshot(
           phase: TunnelPhase.failed,
           failure: TunnelFailure.noCandidates,
@@ -817,6 +843,7 @@ class TunnelService {
       if (reachable.isEmpty && rememberedConfigs.isEmpty) {
         _log.warn('No server reachable',
             detail: '0 of ${usable.length} accepted a connection');
+        _reportFailure(FailReason.noneReachable);
         _emit(TunnelSnapshot(
           phase: TunnelPhase.failed,
           failure: TunnelFailure.noneAnswered,
@@ -912,6 +939,10 @@ class TunnelService {
         }
       }
 
+      // Reachable servers existed and none of them carried traffic -- a
+      // different fact from "nothing answered", and the two must not be one
+      // number in the data.
+      _reportFailure(FailReason.noTraffic);
       _emit(TunnelSnapshot(
         phase: TunnelPhase.failed,
         failure: TunnelFailure.noneAnswered,
@@ -919,12 +950,31 @@ class TunnelService {
       ));
     } catch (e) {
       await _stop();
+      _reportFailure(FailReason.coreFailed);
       _emit(TunnelSnapshot(
         phase: TunnelPhase.failed,
         failure: TunnelFailure.error,
         errorDetail: '$e',
       ));
     }
+  }
+
+  /// One row for the attempt as a whole: the user pressed connect and got
+  /// nothing, and this is why.
+  ///
+  /// Per-server outcomes already go to the reports table. This is the other
+  /// half of the picture -- a reason attached to the person who was left
+  /// without a tunnel, which is what "68 of them failed" was missing.
+  void _reportFailure(FailReason reason) {
+    onConnectFailed?.call(TunnelFailedFacts(
+      reason: reason,
+      picked: _lastUserChose ? PickedBy.manual : PickedBy.auto,
+      candidatesTried: _attemptsMade,
+      gaveUpAfterS: _connectStartedAt == null
+          ? 0
+          : DateTime.now().difference(_connectStartedAt!).inSeconds,
+      askedCountry: _lastPreferredCountry,
+    ));
   }
 
   /// Starts [config], proves traffic leaves through it, and publishes the
@@ -954,6 +1004,7 @@ class TunnelService {
     // will not carry the phone's traffic either, and finding that out this way
     // costs no TUN, no route, and no key in the status bar.
     if (_cancelled) return false;
+    _attemptsMade++;
     final viaProxy = await _checkThroughProxy(config, failures);
     final proxyVerdict = _verifyEgress(before, viaProxy, config);
     if (viaProxy == null || proxyVerdict != null) {
@@ -1036,6 +1087,22 @@ class TunnelService {
     _log.good('Connected',
         detail: '${after.ip} (${after.country ?? '?'}), '
             '${pingMs == null ? 'latency unknown' : '$pingMs ms'}');
+    onTunnelUp?.call(TunnelUpFacts(
+      config: config,
+      picked: _lastUserChose ? PickedBy.manual : PickedBy.auto,
+      connectMs: _connectStartedAt == null
+          ? 0
+          : DateTime.now().difference(_connectStartedAt!).inMilliseconds,
+      // Not counting this one: the question is how many the user sat through
+      // before the one that worked.
+      attemptsBefore: _attemptsMade > 0 ? _attemptsMade - 1 : 0,
+      // Side by side on purpose. A prediction of 90 ms that delivers 400 is a
+      // fault in the ranking, and only these two columns together show it.
+      probeMs: probeMs > 0 ? probeMs : null,
+      tunnelMs: latency,
+      exitCountry: after.country,
+      askedCountry: _lastPreferredCountry,
+    ));
     return true;
   }
 
@@ -1087,6 +1154,14 @@ class TunnelService {
         ? 'was not connected'
         : 'after ${DateTime.now().difference(_connectedAt!).inSeconds}s';
     _log.info('Disconnect requested', detail: up);
+    if (_connectedAt != null) {
+      onTunnelDown?.call(EndedBy.user);
+    } else if (_snapshot.isBusy) {
+      // Pressed stop in the middle of a search: not a failure of the app, but
+      // the user still ended up with no tunnel, and how often that happens is
+      // worth knowing.
+      _reportFailure(FailReason.cancelled);
+    }
     _cancelled = true;
     // Forget the request, so a network change after a deliberate disconnect
     // does not helpfully bring the tunnel back up.
