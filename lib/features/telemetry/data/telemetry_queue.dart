@@ -54,16 +54,19 @@ class TelemetryQueue {
   ///
   /// [mayUpload] is asked first, so nothing is sent while a tunnel is being
   /// built -- measuring a connection must not compete with it for the radio.
-  Future<void> flush({Future<bool> Function()? mayUpload}) async {
-    if (_flushing) return;
-    if (mayUpload != null && !await mayUpload()) return;
+  /// Returns false when the rows are still waiting -- either because the
+  /// moment was wrong or because the send failed. The caller decides whether
+  /// to come back; this one only reports.
+  Future<bool> flush({Future<bool> Function()? mayUpload}) async {
+    if (_flushing) return false;
+    if (mayUpload != null && !await mayUpload()) return false;
     _flushing = true;
     var sent = 0;
     try {
       final prefs = await SharedPreferences.getInstance();
       var sessions = prefs.getStringList(_sessionsKey) ?? <String>[];
       var failures = prefs.getStringList(_failuresKey) ?? <String>[];
-      if (sessions.isEmpty && failures.isEmpty) return;
+      if (sessions.isEmpty && failures.isEmpty) return true;
 
       final install = await InstallId.get();
       while (sessions.isNotEmpty || failures.isNotEmpty) {
@@ -84,10 +87,12 @@ class TelemetryQueue {
     } catch (e) {
       // Kept for the next flush. Not an error the user needs to see.
       AppLog.instance.info('Telemetry kept for later', detail: '$e');
+      return false;
     } finally {
       _flushing = false;
     }
     if (sent > 0) AppLog.instance.info('Telemetry sent', detail: '$sent');
+    return true;
   }
 
   static Map<String, dynamic> _decode(String raw) =>

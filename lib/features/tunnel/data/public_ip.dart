@@ -44,7 +44,7 @@ class PublicIp {
   /// the *old exit*, which would be labelled as the user's own address: the
   /// same mistake that once filed an Iranian SIM as OVH France (§40), except
   /// this one would be on screen.
-  static Future<({String ip, String? country})?> read({
+  static Future<({String ip, String? country, String? asn})?> read({
     Duration timeout = const Duration(seconds: 8),
     Duration settle = const Duration(seconds: 6),
   }) async {
@@ -53,10 +53,16 @@ class PublicIp {
     // Raced, not tried in turn. Sequentially, five probes behind a blocked
     // one cost their whole timeout each, and the card would have sat empty
     // for the better part of a minute.
-    final answer = Completer<({String ip, String? country})?>();
+    final answer = Completer<({String ip, String? country, String? asn})?>();
     final clients = <Dio>[];
-    ({String ip, String? country})? partial;
-    String? winner;
+    ({String ip, String? country, String? asn})? partial;
+    // Two names, because the probe that answers first is often not the probe
+    // that supplies the country: ipify is the quickest from here and returns
+    // an address alone. Logged as one, the line read "IR via api.ipify.org",
+    // which is a service that cannot say IR. A diagnostic that misattributes
+    // its own source is worse than no diagnostic.
+    String? completeFrom;
+    String? partialFrom;
     var pending = _probes.length;
 
     void settleOne() {
@@ -75,11 +81,11 @@ class PublicIp {
         final reading = _parse(res.data ?? '');
         if (reading == null) return;
         if (reading.country != null) {
-          winner ??= url;
+          completeFrom ??= url;
           if (!answer.isCompleted) answer.complete(reading);
-        } else {
-          partial ??= reading;
-          winner ??= url;
+        } else if (partial == null) {
+          partial = reading;
+          partialFrom = url;
         }
       }, onError: (Object _) {
         // Blocked, or simply slower than the one that won.
@@ -94,11 +100,14 @@ class PublicIp {
       // Logged because which probes answer is a property of the network the
       // user is on, and the next "why is there no flag" is answered by this
       // line rather than by guessing.
+      final from = reading == null
+          ? null
+          : (reading.country != null ? completeFrom : partialFrom);
       AppLog.instance.info(
         'Own IP read',
         detail: reading == null
             ? 'nothing answered'
-            : '${reading.country ?? 'country unknown'} · via ${_hostOf(winner ?? '?')}',
+            : '${reading.country ?? 'country unknown'} · via ${_hostOf(from ?? '?')}',
       );
       return reading;
     } finally {
@@ -123,7 +132,7 @@ class PublicIp {
 
   static String _hostOf(String url) => Uri.tryParse(url)?.host ?? url;
 
-  static ({String ip, String? country})? _parse(String body) {
+  static ({String ip, String? country, String? asn})? _parse(String body) {
     try {
       final decoded = jsonDecode(body);
       if (decoded is Map) {
@@ -139,10 +148,39 @@ class PublicIp {
           country: country != null && country.length == 2
               ? country.toUpperCase()
               : null,
+          asn: _asnOf(decoded),
         );
       }
     } catch (_) {
       // Not JSON.
+    }
+    return null;
+  }
+
+  /// The network the address belongs to -- Shatel, MCI, Irancell -- as its AS
+  /// number.
+  ///
+  /// It used to come only from ip-api's `as` field, which is blocked from
+  /// Iran, so the column was empty for exactly the users the app exists for
+  /// (confirmed on a J7, 2026-10-02: a complete session row with asn null).
+  /// Two of the other probes carry it in their own spelling: ipinfo as
+  /// "AS16276 OVH SAS" in `org`, ipwho.is as a bare number under
+  /// `connection.asn`.
+  static String? _asnOf(Map<dynamic, dynamic> json) {
+    for (final key in ['as', 'org', 'asn']) {
+      final value = json[key];
+      if (value is String && value.startsWith('AS')) {
+        final number = value.split(' ').first;
+        if (RegExp(r'^AS[0-9]{1,10}$').hasMatch(number)) return number;
+      }
+    }
+    final connection = json['connection'];
+    if (connection is Map) {
+      final asn = connection['asn'];
+      if (asn is int && asn > 0) return 'AS$asn';
+      if (asn is String && RegExp(r'^[0-9]{1,10}$').hasMatch(asn)) {
+        return 'AS$asn';
+      }
     }
     return null;
   }

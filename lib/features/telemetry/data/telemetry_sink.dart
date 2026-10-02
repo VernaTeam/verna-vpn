@@ -36,6 +36,7 @@ class TelemetrySink {
 
   SessionRecord? _open;
   Timer? _heartbeat;
+  Timer? _retry;
   int _lastSeenEpoch = 0;
 
   /// Whether this row may leave the phone at all.
@@ -76,7 +77,11 @@ class TelemetrySink {
       exitCountry: facts.exitCountry,
       transport: transport,
       operator: operator,
-      asn: _ref.read(tunnelServiceProvider).lastAsn,
+      // The own-IP reading first: the tunnel service's lastAsn comes from the
+      // pre-connect ip-api lookup, which is blocked from Iran and therefore
+      // null for most of the users this is for.
+      asn: _ref.read(ownIpProvider).valueOrNull?.asn ??
+          _ref.read(tunnelServiceProvider).lastAsn,
       country: _ref.read(ownIpProvider).valueOrNull?.country,
       appVersion: kAppVersion,
     );
@@ -158,7 +163,8 @@ class TelemetrySink {
       askedCountry: facts.askedCountry,
       transport: transport,
       operator: operator,
-      asn: _ref.read(tunnelServiceProvider).lastAsn,
+      asn: _ref.read(ownIpProvider).valueOrNull?.asn ??
+          _ref.read(tunnelServiceProvider).lastAsn,
       country: _ref.read(ownIpProvider).valueOrNull?.country,
       appVersion: kAppVersion,
     );
@@ -182,10 +188,43 @@ class TelemetrySink {
   /// The same rule the reports use: sent through a tunnel, the server would
   /// see a VPN exit instead of the phone's own network. Here it also keeps the
   /// upload from competing with the connection being measured.
-  Future<void> flush() => _ref.read(telemetryQueueProvider).flush(
-        mayUpload: () async {
-          if (!_ref.read(tunnelServiceProvider).noTunnel) return false;
-          return await NetworkStatus.vpnActive() != true;
-        },
-      );
+  ///
+  /// And it comes back if the moment was wrong. Measured on a J7 on
+  /// 2026-10-02: a session was recorded, the speed sample ran, the disconnect
+  /// queued the row -- and the one flush it got was the second after the
+  /// disconnect, while Android still held the old VPN network up. The guard
+  /// refused, correctly, and nothing ever asked again, so the row sat on the
+  /// phone. Reports never showed this because the device test flushes them
+  /// again a minute later; telemetry has no such second caller, so it needs
+  /// its own.
+  Future<void> flush() async {
+    _retry?.cancel();
+    final sent = await _ref.read(telemetryQueueProvider).flush(
+          mayUpload: () async {
+            if (!_ref.read(tunnelServiceProvider).noTunnel) return false;
+            return await NetworkStatus.vpnActive() != true;
+          },
+        );
+    if (!sent) _scheduleRetry(1);
+  }
+
+  /// The ghost VPN clears in seconds; a network that is simply down can take
+  /// longer. Five tries over about four minutes covers both, and anything
+  /// still waiting goes out on the next launch.
+  static const int _retries = 5;
+  static const Duration _retryAfter = Duration(seconds: 45);
+
+  void _scheduleRetry(int attempt) {
+    if (attempt > _retries) return;
+    _retry?.cancel();
+    _retry = Timer(_retryAfter, () async {
+      final sent = await _ref.read(telemetryQueueProvider).flush(
+            mayUpload: () async {
+              if (!_ref.read(tunnelServiceProvider).noTunnel) return false;
+              return await NetworkStatus.vpnActive() != true;
+            },
+          );
+      if (!sent) _scheduleRetry(attempt + 1);
+    });
+  }
 }

@@ -6,6 +6,7 @@
 // person who wrote it remembered the schema.
 //
 //   dart run tool/telemetry_sample.dart
+// ignore_for_file: avoid_print -- printing the payload is the whole job.
 import 'dart:convert';
 
 import 'package:verna_vpn/features/telemetry/domain/telemetry_records.dart';

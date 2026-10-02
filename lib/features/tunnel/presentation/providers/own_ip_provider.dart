@@ -8,7 +8,7 @@ import 'tunnel_provider.dart';
 
 /// What this phone looks like from outside when nothing is tunnelling it: the
 /// address, and the country it is in.
-typedef OwnEgress = ({String ip, String? country});
+typedef OwnEgress = ({String ip, String? country, String? asn});
 
 /// The phone's own public address, kept only while nothing is tunnelling.
 ///
