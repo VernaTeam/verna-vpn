@@ -15,7 +15,7 @@ void main() {
   final session = SessionRecord(
     uid: newUid(),
     startedAt: DateTime.now().subtract(const Duration(minutes: 31)),
-    picked: PickedBy.manual,
+    picked: PickedBy.country,
     askedCountry: 'DE',
     connectMs: 5100,
     attemptsBefore: 2,

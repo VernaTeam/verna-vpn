@@ -886,11 +886,15 @@ class _MapCard extends ConsumerWidget {
     final chosenCode = connected
         ? snapshot.displayCountryCode
         : (chosen?.countryCode ?? preferred);
-    // In automatic mode there is no chosen country, and the map sat on the
-    // whole world with an address in the corner and no place attached to it.
-    // The user's own country is the honest thing to show there: it is where
-    // they are now, and it is what the tunnel is about to change.
-    final showingOwn = !connected && chosenCode == null;
+    // Before a tunnel, the map is about where the user actually is.
+    //
+    // It used to switch to the chosen country as soon as one was picked,
+    // while the callout underneath still read "Your IP" with the user's own
+    // address -- a Dutch flag over an Iranian address, which Meysam caught on
+    // 2026-10-05. The heading and the address have to describe the same place.
+    // The chosen country is already named in the card directly above this one,
+    // so the map says the thing nothing else says: this is you, now.
+    final showingOwn = !connected;
     final code = showingOwn ? ownIp?.country : chosenCode;
 
     // Cyan only ever means protected. A country the app has merely been asked

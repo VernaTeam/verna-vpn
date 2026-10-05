@@ -12,6 +12,39 @@
 -- is still far closer to a user count than the reports table's reporter hash,
 -- which is derived from an IP and rotates daily.
 
+-- Two kinds of row are true but not useful as measurements, and every query
+-- below that averages anything excludes them. They are counted on their own in
+-- section 0 instead, because the churn they describe is worth seeing -- just
+-- not mixed into "how long is a session".
+--
+--   * A session under 2 s that moved no bytes. Measured on a J7 and an A54,
+--     2026-10-05: tapping the orb twice in a second opens a tunnel and tears
+--     it down again, and the row that comes back says duration 0.
+--   * A `cancelled` failure with gave_up_after_s = 0. That is a double tap,
+--     not a decision.
+
+.print ''
+.print '=== 0. Churn: rows that are real but are not sessions ==='
+SELECT
+  (SELECT COUNT(*) FROM sessions
+     WHERE COALESCE(duration_s, 0) < 2
+       AND COALESCE(bytes_down, 0) = 0)            AS stillborn_sessions,
+  (SELECT COUNT(*) FROM failures
+     WHERE reason = 'cancelled'
+       AND COALESCE(gave_up_after_s, 0) = 0)       AS mistap_cancels,
+  (SELECT COUNT(*) FROM sessions)                  AS sessions_total,
+  (SELECT COUNT(*) FROM failures)                  AS failures_total;
+
+-- Everything from here on reads through these two views rather than the raw
+-- tables, so a query added later gets the same treatment by default.
+CREATE TEMP VIEW real_sessions AS
+  SELECT * FROM sessions
+   WHERE COALESCE(duration_s, 0) >= 2 OR COALESCE(bytes_down, 0) > 0;
+
+CREATE TEMP VIEW real_failures AS
+  SELECT * FROM failures
+   WHERE NOT (reason = 'cancelled' AND COALESCE(gave_up_after_s, 0) = 0);
+
 .print ''
 .print '=== 1. How many installs, and how much did they use it ==='
 SELECT date(received_at)                       AS day,
@@ -20,14 +53,14 @@ SELECT date(received_at)                       AS day,
        ROUND(SUM(duration_s) / 3600.0, 1)      AS hours_total,
        ROUND(AVG(duration_s) / 60.0, 1)        AS avg_minutes,
        ROUND(SUM(bytes_down) / 1073741824.0, 2) AS gb_down
-FROM sessions
+FROM real_sessions
 GROUP BY 1 ORDER BY 1 DESC LIMIT 30;
 
 .print ''
 .print '=== 2. Did they come back? (installs by how many days they appear on) ==='
 WITH days AS (
   SELECT install, COUNT(DISTINCT date(received_at)) AS active_days
-  FROM sessions GROUP BY 1
+  FROM real_sessions GROUP BY 1
 )
 SELECT active_days, COUNT(*) AS installs
 FROM days GROUP BY 1 ORDER BY 1;
@@ -40,7 +73,7 @@ SELECT reason,
        ROUND(AVG(servers_live), 1)     AS avg_live_servers,
        ROUND(AVG(candidates_tried), 1) AS avg_tried,
        ROUND(AVG(gave_up_after_s), 0)  AS avg_seconds
-FROM failures
+FROM real_failures
 GROUP BY 1 ORDER BY attempts DESC;
 
 .print ''
@@ -50,17 +83,17 @@ SELECT transport,
        COUNT(*)                 AS failures,
        COUNT(DISTINCT install)  AS installs,
        ROUND(AVG(servers_live), 1) AS avg_live_servers
-FROM failures
+FROM real_failures
 GROUP BY 1, 2 ORDER BY failures DESC LIMIT 20;
 
 .print ''
 .print '=== 5. Success rate per install: connected at least once vs never ==='
 WITH tried AS (
-  SELECT install FROM sessions
+  SELECT install FROM real_sessions
   UNION
-  SELECT install FROM failures
+  SELECT install FROM real_failures
 ),
-ok AS (SELECT DISTINCT install FROM sessions)
+ok AS (SELECT DISTINCT install FROM real_sessions)
 SELECT (SELECT COUNT(*) FROM tried)                    AS installs_that_tried,
        (SELECT COUNT(*) FROM ok)                       AS installs_that_connected,
        ROUND(100.0 * (SELECT COUNT(*) FROM ok)
@@ -74,13 +107,13 @@ SELECT picked,
        ROUND(AVG(attempts_before), 1) AS avg_servers_tried,
        ROUND(AVG(duration_s) / 60.0, 1) AS avg_minutes,
        ROUND(AVG(speed_kbps), 0)      AS avg_kbps
-FROM sessions WHERE picked IS NOT NULL
+FROM real_sessions WHERE picked IS NOT NULL
 GROUP BY 1;
 
 .print ''
 .print '=== 6b. ...and when they fail ==='
 SELECT picked, reason, COUNT(*) AS failures
-FROM failures WHERE picked IS NOT NULL
+FROM real_failures WHERE picked IS NOT NULL
 GROUP BY 1, 2 ORDER BY 1, failures DESC;
 
 .print ''
@@ -91,7 +124,7 @@ SELECT COUNT(*)                                   AS measured_both,
        ROUND(AVG(tunnel_ms - probe_ms), 0)        AS avg_gap,
        SUM(tunnel_ms > probe_ms * 2)              AS more_than_double,
        ROUND(100.0 * SUM(tunnel_ms > probe_ms * 2) / COUNT(*), 0) AS pct_double
-FROM sessions WHERE probe_ms IS NOT NULL AND tunnel_ms IS NOT NULL;
+FROM real_sessions WHERE probe_ms IS NOT NULL AND tunnel_ms IS NOT NULL;
 
 .print ''
 .print '=== 8. Was it fast? (256 KB sample through the tunnel) ==='
@@ -101,7 +134,7 @@ SELECT COALESCE(protocol, '-')      AS protocol,
        MIN(speed_kbps)              AS worst,
        MAX(speed_kbps)              AS best,
        ROUND(AVG(tunnel_ms), 0)     AS avg_ping
-FROM sessions WHERE speed_kbps IS NOT NULL
+FROM real_sessions WHERE speed_kbps IS NOT NULL
 GROUP BY 1 ORDER BY avg_kbps DESC;
 
 .print ''
@@ -112,7 +145,7 @@ SELECT COALESCE(exit_country, '-')  AS country,
        ROUND(AVG(speed_kbps), 0)    AS avg_kbps,
        ROUND(AVG(tunnel_ms), 0)     AS avg_ping,
        ROUND(AVG(duration_s) / 60.0, 1) AS avg_minutes
-FROM sessions
+FROM real_sessions
 GROUP BY 1 HAVING sessions >= 3 ORDER BY avg_kbps DESC;
 
 .print ''
@@ -131,7 +164,7 @@ SELECT CASE
        ROUND(AVG(tunnel_ms), 0)     AS avg_ping,
        SUM(ended_by = 'user')       AS ended_by_user,
        SUM(ended_by IN ('network', 'core_died', 'app_killed')) AS lost
-FROM sessions WHERE duration_s IS NOT NULL
+FROM real_sessions WHERE duration_s IS NOT NULL
 GROUP BY 1 ORDER BY MIN(duration_s);
 
 .print ''
@@ -139,7 +172,7 @@ GROUP BY 1 ORDER BY MIN(duration_s);
 SELECT COALESCE(ended_by, '-') AS ended_by,
        COUNT(*)                AS sessions,
        ROUND(AVG(duration_s) / 60.0, 1) AS avg_minutes
-FROM sessions GROUP BY 1 ORDER BY sessions DESC;
+FROM real_sessions GROUP BY 1 ORDER BY sessions DESC;
 
 .print ''
 .print '=== 12. Which release each install is on ==='
@@ -147,4 +180,4 @@ SELECT COALESCE(app_version, '-') AS version,
        COUNT(DISTINCT install)    AS installs,
        COUNT(*)                   AS sessions,
        MAX(date(received_at))     AS last_seen
-FROM sessions GROUP BY 1 ORDER BY installs DESC;
+FROM real_sessions GROUP BY 1 ORDER BY installs DESC;

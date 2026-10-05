@@ -8,7 +8,7 @@ void main() {
   SessionRecord fullSession() => SessionRecord(
         uid: newUid(),
         startedAt: DateTime.utc(2026, 10, 1, 9, 30, 15),
-        picked: PickedBy.manual,
+        picked: PickedBy.country,
         askedCountry: 'DE',
         connectMs: 4200,
         attemptsBefore: 3,

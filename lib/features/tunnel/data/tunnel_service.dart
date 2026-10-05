@@ -959,6 +959,15 @@ class TunnelService {
     }
   }
 
+  /// How much of this connection the user decided.
+  ///
+  /// A country counts as a choice: it is how most people steer the app, and
+  /// recording it as `auto` would answer "does choosing help" with the wrong
+  /// two groups.
+  PickedBy get _picked => _lastUserChose
+      ? PickedBy.server
+      : (_lastPreferredCountry != null ? PickedBy.country : PickedBy.auto);
+
   /// One row for the attempt as a whole: the user pressed connect and got
   /// nothing, and this is why.
   ///
@@ -968,7 +977,7 @@ class TunnelService {
   void _reportFailure(FailReason reason) {
     onConnectFailed?.call(TunnelFailedFacts(
       reason: reason,
-      picked: _lastUserChose ? PickedBy.manual : PickedBy.auto,
+      picked: _picked,
       candidatesTried: _attemptsMade,
       gaveUpAfterS: _connectStartedAt == null
           ? 0
@@ -1022,32 +1031,42 @@ class TunnelService {
     _log.good('Server answered a proxy check',
         detail: '${viaProxy.ip}${viaProxy.country == null ? '' : ' (${viaProxy.country})'}'
             ' -- bringing the tunnel up');
-    failures.clear();
 
     if (!await _startTunnel(config)) {
       await _stop();
       return false;
     }
-    _log.info('Tunnel up', detail: 'checking that traffic leaves through it');
+    _log.info('Tunnel up', detail: 'checking that the route carries traffic');
 
     // Let the route settle before the first request, or the cost of
     // installing it is charged to the server.
     await Future<void>.delayed(_tunnelSettle);
     if (_cancelled) return false;
 
-    final after = await _readEgress(timeout: _verifyBudget, failures: failures);
-    final verdict = _verifyEgress(before, after, config);
-    if (verdict != null || after == null) {
+    // What the tunnel has to prove here is narrower than it used to be.
+    //
+    // The exit address and its country were already measured through this
+    // same server, seconds ago, by the proxy check -- and [_verifyEgress] has
+    // already passed judgement on them. Racing three geolocation services
+    // again, with a twelve second budget, was asking the same question twice
+    // and charging the user for it: measured on an A54, seven seconds between
+    // "Tunnel up" and "Connected", all of it with the VPN key showing in the
+    // status bar for a connection the app had not claimed yet. Meysam has
+    // raised that key twice.
+    //
+    // So the tunnel is asked the one thing the proxy could not answer -- does
+    // the phone's own routing reach the internet through it -- and that is a
+    // single small request.
+    final routed = await _tunnelRoutes();
+    if (!routed) {
       // A hand-picked server gets one more question before it is given up
       // on, because its failure is the one a user asks about: does anything
       // pass when no name has to be resolved? That tells a server that is
       // dead in the tunnel from one that only cannot reach the resolver.
-      final withoutDns =
-          _lastUserChose && after == null ? await _probeWithoutDns() : null;
+      final withoutDns = _lastUserChose ? await _probeWithoutDns() : null;
       _log.warn('Tunnel carried no traffic',
           detail: [
-            verdict ?? 'no answer through the tunnel',
-            if (after == null && failures.isNotEmpty) failures.join('; '),
+            'the route is up but nothing came back through it',
             if (withoutDns != null) withoutDns,
           ].join(' -- '));
       // A remembered server that has stopped working must not keep being
@@ -1058,6 +1077,10 @@ class TunnelService {
       await _stop();
       return false;
     }
+
+    // The exit address comes from the proxy check: same server, same exit,
+    // measured a few seconds ago and already checked by [_verifyEgress].
+    final after = viaProxy;
 
     final latency = await _measureLatency();
     final pingMs = latency ?? (probeMs > 0 ? probeMs : null);
@@ -1089,7 +1112,7 @@ class TunnelService {
             '${pingMs == null ? 'latency unknown' : '$pingMs ms'}');
     onTunnelUp?.call(TunnelUpFacts(
       config: config,
-      picked: _lastUserChose ? PickedBy.manual : PickedBy.auto,
+      picked: _picked,
       connectMs: _connectStartedAt == null
           ? 0
           : DateTime.now().difference(_connectStartedAt!).inMilliseconds,
@@ -1119,28 +1142,66 @@ class TunnelService {
   /// the setup), and times the next two on the same socket. The faster of
   /// those is one request and one response through the tunnel, which is what
   /// a person means by ping.
+  /// Does anything come back through the tunnel at all?
+  ///
+  /// One request to a 204 endpoint, which answers with no body and is the
+  /// cheapest possible "yes". It proves the route Android installed actually
+  /// carries the phone's traffic; whether the *server* works was settled by
+  /// the proxy check before the interface was ever created.
+  Future<bool> _tunnelRoutes() async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6)
+      ..idleTimeout = const Duration(seconds: 8);
+    try {
+      final request = await client
+          .getUrl(Uri.parse(_latencyProbe))
+          .timeout(const Duration(seconds: 6));
+      final response = await request.close().timeout(const Duration(seconds: 6));
+      await response.drain<void>();
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// The round trip through the tunnel, as the best of three.
+  ///
+  /// Each round is its own attempt. It used to be one try/catch around all
+  /// three, so a single slow round threw away the two good ones and the whole
+  /// measurement came back null -- which on an Iranian mobile tunnel is most
+  /// of the time. Measured on an A54 on Irancell, 2026-10-05: the session row
+  /// had no tunnel_ms at all, so the one comparison this is for (what the app
+  /// promised against what it delivered) was missing on exactly the network
+  /// that matters. Eight seconds rather than five for the same reason.
   Future<int?> _measureLatency() async {
     final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 5)
-      ..idleTimeout = const Duration(seconds: 10);
+      ..connectionTimeout = const Duration(seconds: 8)
+      ..idleTimeout = const Duration(seconds: 12);
     try {
       int? best;
       for (var i = 0; i < 3; i++) {
-        final stopwatch = Stopwatch()..start();
-        final request = await client
-            .getUrl(Uri.parse(_latencyProbe))
-            .timeout(const Duration(seconds: 5));
-        final response =
-            await request.close().timeout(const Duration(seconds: 5));
-        await response.drain<void>();
-        stopwatch.stop();
-        if (i == 0) continue;
-        final ms = stopwatch.elapsedMilliseconds;
-        if (best == null || ms < best) best = ms;
+        try {
+          final stopwatch = Stopwatch()..start();
+          final request = await client
+              .getUrl(Uri.parse(_latencyProbe))
+              .timeout(const Duration(seconds: 8));
+          final response =
+              await request.close().timeout(const Duration(seconds: 8));
+          await response.drain<void>();
+          stopwatch.stop();
+          // The first round pays for the connection and the TLS handshake,
+          // which is not what latency means here.
+          if (i == 0) continue;
+          final ms = stopwatch.elapsedMilliseconds;
+          if (best == null || ms < best) best = ms;
+        } catch (_) {
+          // This round only. A tunnel that answers twice and stalls once has
+          // a latency, and it is the two answers.
+        }
       }
       return best;
-    } catch (_) {
-      return null;
     } finally {
       client.close(force: true);
     }

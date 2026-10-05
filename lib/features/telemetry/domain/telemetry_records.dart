@@ -11,11 +11,21 @@ library;
 import 'dart:math';
 
 /// How the server was chosen.
+///
+/// Three, not two. It was manual-or-auto until an A54 on Irancell recorded a
+/// session as `auto` while the user had chosen the Netherlands by hand
+/// (2026-10-05): `manual` meant "tapped this exact server", and choosing a
+/// country -- the common way people steer this app -- fell through to `auto`.
+/// The question being asked is "does choosing help", so choosing a country has
+/// to be its own answer.
 enum PickedBy {
-  /// The user tapped a country or a server.
-  manual,
+  /// This exact server, tapped in the list.
+  server,
 
-  /// The app searched.
+  /// A country, with the app free to pick a server inside it.
+  country,
+
+  /// The app chose everything.
   auto;
 
   String get wire => name;
@@ -189,7 +199,12 @@ class SessionRecord {
     return SessionRecord(
       uid: uid,
       startedAt: DateTime.fromMillisecondsSinceEpoch(epoch),
-      picked: json['picked'] == 'manual' ? PickedBy.manual : PickedBy.auto,
+      picked: PickedBy.values.firstWhere(
+        (p) => p.wire == json['picked'],
+        // A row written by an older build says "manual"; it meant a
+        // hand-picked server.
+        orElse: () => json['picked'] == 'manual' ? PickedBy.server : PickedBy.auto,
+      ),
       askedCountry: json['asked_country'] as String?,
       connectMs: json['connect_ms'] as int?,
       attemptsBefore: json['attempts_before'] as int?,

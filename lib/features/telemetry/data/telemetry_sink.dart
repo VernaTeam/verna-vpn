@@ -101,14 +101,34 @@ class TelemetrySink {
     });
 
     // After a moment: the first seconds of a tunnel are the route settling,
-    // and a sample taken then measures that rather than the server.
-    unawaited(Future<void>.delayed(const Duration(seconds: 3), () async {
-      if (_open?.uid != session.uid) return;
-      final kbps = await SpeedProbe.measure();
-      if (kbps == null || _open?.uid != session.uid) return;
+    // and a sample taken then measures that rather than the server. Tried
+    // twice, because the first attempt lands while the route is still new and
+    // a slow mobile tunnel can miss it entirely.
+    unawaited(_sampleSpeed(session, delay: const Duration(seconds: 5)));
+  }
+
+  /// One speed sample, and one retry a while later if it did not land.
+  Future<void> _sampleSpeed(
+    SessionRecord session, {
+    required Duration delay,
+    bool retry = true,
+  }) async {
+    await Future<void>.delayed(delay);
+    // Still the same session? A sample that arrives after the user has
+    // reconnected belongs to a tunnel that no longer exists.
+    if (_open?.uid != session.uid) return;
+    final kbps = await SpeedProbe.measure();
+    if (_open?.uid != session.uid) return;
+    if (kbps != null) {
       session.speedKbps = kbps;
       AppLog.instance.info('Speed sample', detail: '$kbps KB/s');
-    }));
+      return;
+    }
+    if (retry) {
+      AppLog.instance.info('Speed sample missed', detail: 'trying once more');
+      await _sampleSpeed(session,
+          delay: const Duration(seconds: 45), retry: false);
+    }
   }
 
   /// Traffic counters from the snapshot stream, for totals and the peak.

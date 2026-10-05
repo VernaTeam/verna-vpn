@@ -29,11 +29,18 @@ class SpeedProbe {
 
   /// Kilobytes per second, or null if the sample could not be taken or is not
   /// worth trusting.
+  ///
+  /// The budget is generous on purpose. Ten seconds to connect was not enough
+  /// on an Iranian mobile tunnel -- measured on an A54 on Irancell,
+  /// 2026-10-05, where the attempt died with "connection timeout after
+  /// 0:00:10" and the session row carried no speed at all. A measurement that
+  /// gives up before the slow networks answer reports only on the fast ones,
+  /// which is the opposite of what it is for.
   static Future<int?> measure({
-    Duration timeout = const Duration(seconds: 20),
+    Duration timeout = const Duration(seconds: 40),
   }) async {
     final dio = Dio(BaseOptions(
-      connectTimeout: const Duration(seconds: 10),
+      connectTimeout: const Duration(seconds: 25),
       receiveTimeout: timeout,
       responseType: ResponseType.bytes,
     ));

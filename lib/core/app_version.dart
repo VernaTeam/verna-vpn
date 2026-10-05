@@ -8,4 +8,4 @@
 /// Kept in step with `version:` in pubspec.yaml by hand. The build number
 /// after the `+` is not part of this: it encodes the ABI (see the note in
 /// pubspec.yaml) and says nothing about which release a user is on.
-const String kAppVersion = '1.0.2';
+const String kAppVersion = '1.0.3';

@@ -1,16 +1,17 @@
 name: verna_vpn
 description: Verna VPN - Free VPN Configs
 publish_to: 'none'
-# Build 9006, and the reason is worth reading before touching it.
+# Build 12008, and the reason is worth reading before touching it.
 #
 # `--split-per-abi` rewrites versionCode as abi * 1000 + build, so this number
-# produces armeabi 10006, arm64 11006 and x86_64 13006. Every one of those
-# sits above 1.0.1's highest published code (universal 10005). Android only
-# ever upgrades to a HIGHER code, so the LOWEST code a release generates
-# (1000 + build) must beat the HIGHEST code the release before it published.
+# produces armeabi 13008, arm64 14008 and x86_64 16008. Every one sits above
+# 1.0.2's highest published code (universal 13007). Android only ever upgrades
+# to a HIGHER code, so the LOWEST code a release generates (1000 + build) must
+# beat the HIGHEST code the release before it published.
 #
 # Published so far: 1.0.0 splits 4002 / 5002 / 7002 and universal 7003;
-# 1.0.1 splits 7004 / 8004 / 10004 and universal 10005.
+# 1.0.1 splits 7004 / 8004 / 10004 and universal 10005;
+# 1.0.2 splits 10006 / 11006 / 13006 and universal 13007.
 #
 # Building each ABI *without* the flag (so they would all share one code) was
 # tried and rejected: the tunnel core arrives as an AAR carrying all three
@@ -18,14 +19,12 @@ publish_to: 'none'
 # 80 MB instead of 32. On the connections this app is for, that matters more
 # than a tidy versionCode.
 #
-# The universal APK is built with `--build-number=13007` so it sits above every
+# The universal APK is built with `--build-number=16009` so it sits above every
 # split in this release and installs over anything.
 #
-# The version NAME moves with every release (Meysam, 2026-09-30), and it has
-# to: the in-app update check compares it against the newest GitHub tag, so a
-# name that stays put means an app that never recognises its successor. Keep
-# it equal to kAppVersion in lib/core/app_version.dart.
-version: 1.0.2+9006
+# Keep the version name equal to kAppVersion in lib/core/app_version.dart: the
+# in-app update check compares it against the newest GitHub tag.
+version: 1.0.3+12008
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
