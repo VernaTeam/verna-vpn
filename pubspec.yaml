@@ -1,7 +1,19 @@
 name: verna_vpn
 description: Verna VPN - Free VPN Configs
 publish_to: 'none'
-# Build 15010, and the reason is worth reading before touching it.
+# Build 15010 under the name 1.0.3, and the reason is worth reading.
+#
+# 1.0.3 was published, and then the update dialog learned to say what is new.
+# That feature is only ever seen by the version a user ALREADY has, so putting
+# it in a 1.0.4 would have meant nobody saw it until 1.0.5. Meysam asked
+# (2026-10-06) for 1.0.3 itself to carry it instead, so the people who have not
+# updated yet get it on their first update. Anyone already on the old 1.0.3
+# keeps what they have; that was accepted deliberately.
+#
+# The build number still moves. Two builds share a NAME, never a code: the old
+# 1.0.3 shipped 13008 / 14008 / 16008 / 16009, this one ships
+# 16010 / 17010 / 19010 / 19011, so a phone on either can still install this
+# and the ladder stays monotonic for whatever comes next.
 #
 # `--split-per-abi` rewrites versionCode as abi * 1000 + build, so this number
 # produces armeabi 16010, arm64 17010 and x86_64 19010. Every one sits above
@@ -25,7 +37,7 @@ publish_to: 'none'
 #
 # Keep the version name equal to kAppVersion in lib/core/app_version.dart: the
 # in-app update check compares it against the newest GitHub tag.
-version: 1.0.4+15010
+version: 1.0.3+15010
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
