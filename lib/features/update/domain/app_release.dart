@@ -6,6 +6,7 @@ class AppRelease {
     required this.apkUrl,
     required this.pageUrl,
     this.notes,
+    this.whatsNew = const [],
   });
 
   /// Digits only: "1.0.1", never "v1.0.1".
@@ -22,4 +23,14 @@ class AppRelease {
 
   /// The release notes, as written on GitHub. May be empty.
   final String? notes;
+
+  /// The two or three lines worth putting in front of someone who is being
+  /// asked to update, in their own language.
+  ///
+  /// Not the release notes: those are a page with tables and download links,
+  /// written for someone standing in front of GitHub. A dialog gets the
+  /// short version or nothing -- and when there is nothing worth naming, the
+  /// honest line is that bugs were fixed, which is what every app on the
+  /// phone says because it is usually true.
+  final List<String> whatsNew;
 }

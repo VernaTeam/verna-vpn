@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ffi' show Abi;
 
 import 'package:dio/dio.dart';
@@ -39,7 +40,9 @@ class UpdateChecker {
   /// pressed it is owed an answer.
   ///
   /// Never throws: a failed check is not an error the user did anything about.
-  static Future<({AppRelease? release, bool reachable})> check() async {
+  static Future<({AppRelease? release, bool reachable})> check({
+    bool persian = false,
+  }) async {
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 10),
       receiveTimeout: const Duration(seconds: 10),
@@ -68,12 +71,14 @@ class UpdateChecker {
             asset['name'] as String: asset['browser_download_url'] as String,
       };
 
+      final notes = (body['body'] as String?)?.trim();
       final release = AppRelease(
         version: version,
         tag: tag,
         apkUrl: _apkFor(names) ?? (body['html_url'] as String?) ?? _releasesPage,
         pageUrl: (body['html_url'] as String?) ?? _releasesPage,
-        notes: (body['body'] as String?)?.trim(),
+        notes: notes,
+        whatsNew: whatsNew(notes, persian: persian),
       );
       AppLog.instance.info('Update available',
           detail: '$tag (this build is $kAppVersion)');
@@ -84,6 +89,63 @@ class UpdateChecker {
     } finally {
       dio.close(force: true);
     }
+  }
+
+
+  /// The short "what's new" for the update dialog, pulled out of the release
+  /// notes.
+  ///
+  /// The notes themselves are a page: tables, download links, headings. None
+  /// of that belongs in a dialog, and parsing prose for the interesting parts
+  /// would guess wrong the first time someone rewrites a heading. So the
+  /// release carries the dialog's copy explicitly, inside an HTML comment:
+  ///
+  ///     <!-- whatsnew
+  ///     Faster connecting.
+  ///     Bug fixes and performance improvements.
+  ///     -->
+  ///     <!-- whatsnew-fa
+  ///     اتصال سریع‌تر.
+  ///     رفع اشکال و بهبود عملکرد.
+  ///     -->
+  ///
+  /// GitHub renders comments as nothing, so the release page stays clean and
+  /// the app still gets a written-for-humans summary. A release that forgets
+  /// the block gets the generic line instead, which is what it would have
+  /// deserved anyway.
+  static List<String> whatsNew(String? notes, {bool persian = false}) {
+    if (notes == null || notes.isEmpty) return const [];
+    // The Persian block when the app is in Persian, falling back to the
+    // English one: a line in the wrong language still says more than nothing.
+    final block = _block(notes, persian ? 'whatsnew-fa' : 'whatsnew') ??
+        _block(notes, persian ? 'whatsnew' : 'whatsnew-fa');
+    if (block == null) return const [];
+    return [
+      for (final line in const LineSplitter().convert(block))
+        if (_tidy(line).isNotEmpty) _tidy(line),
+    ].take(_maxLines).toList();
+  }
+
+  /// At most this many lines reach the dialog. A changelog is not a dialog.
+  static const int _maxLines = 4;
+
+  static String? _block(String notes, String name) {
+    final match = RegExp(
+      '<!--\\s*$name\\s*(.*?)-->',
+      dotAll: true,
+      caseSensitive: false,
+    ).firstMatch(notes);
+    final body = match?.group(1)?.trim();
+    return body == null || body.isEmpty ? null : body;
+  }
+
+  /// Without the bullet someone typed, and clipped: a line long enough to
+  /// wrap four times is a paragraph that belongs on the release page.
+  static String _tidy(String line) {
+    var text = line.trim();
+    text = text.replaceFirst(RegExp(r'^[-*\u2022]\s*'), '');
+    if (text.length > 120) text = '${text.substring(0, 117)}...';
+    return text;
   }
 
   /// The file built for this phone's processor.

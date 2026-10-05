@@ -63,7 +63,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   Future<void> _checkForUpdates(S s) async {
     setState(() => _checking = true);
-    final result = await UpdateChecker.check();
+    final result = await UpdateChecker.check(persian: s.isFa);
     if (!mounted) return;
     setState(() => _checking = false);
     final messenger = ScaffoldMessenger.of(context);

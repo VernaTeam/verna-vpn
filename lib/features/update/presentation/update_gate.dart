@@ -36,7 +36,10 @@ class _UpdateGateState extends ConsumerState<UpdateGate> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await Future<void>.delayed(const Duration(seconds: 4));
       if (!mounted) return;
-      final release = (await UpdateChecker.check()).release;
+      final release = (await UpdateChecker.check(
+        persian: ref.read(stringsProvider).isFa,
+      ))
+          .release;
       if (release == null || !mounted) return;
       if (await UpdateChecker.wasDismissed(release.version)) return;
       if (!mounted) return;
@@ -67,8 +70,44 @@ Future<void> showUpdateDialog(
       backgroundColor: c.surface,
       title: Text(strings.updateAvailable(release.version),
           style: TextStyle(color: c.textPrimary, fontSize: 17)),
-      content: Text(strings.updateBody(release.version),
-          style: TextStyle(color: c.textSecondary, fontSize: 14, height: 1.6)),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(strings.updateBody(release.version),
+              style:
+                  TextStyle(color: c.textSecondary, fontSize: 14, height: 1.6)),
+          const SizedBox(height: 14),
+          Text(strings.whatsNew,
+              style: TextStyle(
+                color: c.textMuted,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6,
+              )),
+          const SizedBox(height: 6),
+          // Whatever the release said, or the honest generic line. Never an
+          // empty space where the reason to update should be.
+          for (final line in (release.whatsNew.isEmpty
+              ? [strings.genericChanges]
+              : release.whatsNew))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('·  ',
+                      style: TextStyle(color: c.accent, fontSize: 14, height: 1.5)),
+                  Expanded(
+                    child: Text(line,
+                        style: TextStyle(
+                            color: c.textSecondary, fontSize: 13.5, height: 1.5)),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),

@@ -439,6 +439,13 @@ class S {
   // Meysam cut it on 2026-09-30: the buttons already say what happens.
   String updateBody(String version) =>
       'Verna VPN $version is available on GitHub.';
+  String get whatsNew => _t('چه چیزی تازه است', "What's new");
+
+  /// What a release that named nothing worth naming gets. Every app on the
+  /// phone says a version of this, because it is usually the truth.
+  String get genericChanges =>
+      _t('رفع اشکال و بهبود عملکرد', 'Bug fixes and performance improvements');
+
   String get updateNow => _t('دریافت', 'Get it');
   String get notNow => _t('بعداً', 'Not now');
   String get openedInBrowser =>
