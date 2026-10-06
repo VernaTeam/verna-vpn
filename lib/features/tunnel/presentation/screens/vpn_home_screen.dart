@@ -10,6 +10,7 @@ import '../../../../core/l10n/app_strings.dart';
 import '../../../../core/theme/palette.dart';
 import '../../../configs/presentation/providers/local_test_provider.dart';
 import '../../../map/presentation/world_map.dart';
+import '../format_rate.dart';
 import '../../../stats/data/protected_time_store.dart';
 import '../../domain/tunnel_snapshot.dart';
 import '../providers/own_ip_provider.dart';
@@ -1374,36 +1375,29 @@ class _SpeedBodyState extends State<_SpeedBody> {
   @override
   Widget build(BuildContext context) {
     final c = context.verna;
-    // The strip sits *behind* the two readings rather than under them. A row
-    // of its own made the card taller than the one beside it and pushed the
-    // protocol and ping cards under the nav bar -- measured on the A54, and
-    // the same complaint as the scroll fix in §39. Behind, it costs nothing
-    // in height and still shows where the numbers have been.
-    return SizedBox(
-      width: double.infinity,
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: CustomPaint(
-              painter: _SparkPainter(
-                down: List<int>.unmodifiable(_down),
-                up: List<int>.unmodifiable(_up),
-                downColour: c.ok,
-                upColour: c.accentBlue,
-                idleColour: c.border,
-              ),
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+    // Readings on one side, the graph on the other.
+    //
+    // It used to be drawn *behind* the two numbers, faint enough not to
+    // obscure them -- which is another way of saying it was in their way and
+    // apologising for it. A chart under text reads as a watermark, and the
+    // numbers had to be dimmed to survive it. Given a column of its own it
+    // can be drawn properly, and neither has to make room for the other. The
+    // card keeps its height either way, which is what put the graph behind
+    // the text in the first place.
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _RateLine(
                 icon: Icons.south_rounded,
                 bytesPerSecond: widget.snapshot.downloadSpeed,
                 colour: c.ok,
               ),
-              const SizedBox(height: 5),
+              const SizedBox(height: 6),
               _RateLine(
                 icon: Icons.north_rounded,
                 bytesPerSecond: widget.snapshot.uploadSpeed,
@@ -1411,8 +1405,24 @@ class _SpeedBodyState extends State<_SpeedBody> {
               ),
             ],
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 10),
+        // A fixed slot, so a four-digit reading never squeezes the graph into
+        // a smear.
+        SizedBox(
+          width: 58,
+          height: _MiniCard.bodyHeight - 6,
+          child: CustomPaint(
+            painter: _SparkPainter(
+              down: List<int>.unmodifiable(_down),
+              up: List<int>.unmodifiable(_up),
+              downColour: c.ok,
+              upColour: c.accentBlue,
+              idleColour: c.border,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1429,23 +1439,11 @@ class _RateLine extends StatelessWidget {
   final int bytesPerSecond;
   final Color colour;
 
-  /// Kilobytes per second, always.
-  ///
-  /// It scaled to MB/s at first, and the unit changing under a moving number
-  /// made the card impossible to read at a glance -- Meysam, 2026-09-30:
-  /// «خیلی سریع عدد عوض میکنه، فقط KB نشون بده». One unit, whole numbers, one
-  /// new reading a second: a value that stays still long enough to be read.
-  static String format(int bps) {
-    final kb = bps / 1024;
-    if (kb <= 0) return '0';
-    // Below a tenth of a kilobyte there is traffic but nothing to round to.
-    return kb < 1 ? kb.toStringAsFixed(1) : kb.round().toString();
-  }
-
   @override
   Widget build(BuildContext context) {
     final c = context.verna;
     final idle = bytesPerSecond <= 0;
+    final shown = formatRate(bytesPerSecond);
     // Muted at rest: throughput is zero whenever the app is in the foreground
     // -- nobody downloads anything while looking at a VPN screen -- and two
     // bright zeroes teach the reader to ignore the row.
@@ -1462,11 +1460,13 @@ class _RateLine extends StatelessWidget {
             child: Icon(icon, size: 12, color: ink),
           ),
           Text(
-            format(bytesPerSecond),
+            shown.value,
             style: TextStyle(
               fontFamily: VernaType.mono,
               color: ink,
-              fontSize: 16,
+              // Smaller than it was: the card holds two of these and a graph,
+              // and the number is a reading, not a headline.
+              fontSize: 14.5,
               fontWeight: FontWeight.w700,
               height: 1,
               fontFeatures: const [FontFeature.tabularFigures()],
@@ -1474,10 +1474,10 @@ class _RateLine extends StatelessWidget {
           ),
           const SizedBox(width: 3),
           Text(
-            'KB/s',
+            shown.unit,
             style: TextStyle(
               color: c.textFaint,
-              fontSize: 9.5,
+              fontSize: 9,
               fontWeight: FontWeight.w600,
               height: 1,
             ),
@@ -1508,11 +1508,10 @@ class _SparkPainter extends CustomPainter {
 
   /// How much of the box the lines may climb into.
   ///
-  /// Not all of it: at full height a busy download drew straight through the
-  /// digits, and a number with a line across it is worse than no graph at all
-  /// («عداد جلو باشه و گراف اون پشت ... کمرنگ»). The top third is the
-  /// numbers' -- the graph lives under them and only grazes the second row.
-  static const double _ceiling = 0.62;
+  /// Just short of the top, so a peak reads as a peak rather than as a line
+  /// clipped by the edge. It used to be 0.62, when the graph was drawn behind
+  /// the numbers and had to keep out of their way; it has its own column now.
+  static const double _ceiling = 0.88;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1524,6 +1523,8 @@ class _SparkPainter extends CustomPainter {
       Offset(size.width, size.height - 0.5),
       baseline,
     );
+    // Nothing measured yet: the baseline alone, so the card does not look
+    // broken while the first second goes by.
     if (down.length < 2) return;
 
     var peak = _floor;
@@ -1554,16 +1555,15 @@ class _SparkPainter extends CustomPainter {
         ..close();
       canvas.drawPath(
         fill,
-        Paint()..color = colour.withValues(alpha: 0.09),
+        Paint()..color = colour.withValues(alpha: 0.16),
       );
       canvas.drawPath(
         path,
         Paint()
-          // Faint: it is behind two lines of text, and a bright line through
-          // a number costs more than the graph adds.
-          ..color = colour.withValues(alpha: 0.3)
+          // Drawn to be read now that nothing sits on top of it.
+          ..color = colour.withValues(alpha: 0.85)
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.3
+          ..strokeWidth = 1.5
           ..strokeJoin = StrokeJoin.round
           ..strokeCap = StrokeCap.round,
       );
