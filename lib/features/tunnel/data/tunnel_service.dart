@@ -561,10 +561,34 @@ class TunnelService {
   Future<void> _adopt() async {
     if (_adopting || _snapshot.phase == TunnelPhase.connected) return;
     _adopting = true;
-    // A live tunnel is this app's again. A disconnect earlier in this run
-    // left _cancelled set, which would read as "the user stopped it".
-    _cancelled = false;
     try {
+      // A running core is not a tunnel.
+      //
+      // The device test runs sing-box in PROXY mode: the same foreground
+      // service, the same notification in the status bar, and no VPN network
+      // at all. Close the app while a test is running and that service
+      // outlives it -- and this used to adopt it as a connection. The egress
+      // read further down then went out over the ordinary network, succeeded,
+      // and the app sat there saying Protected with no server, no ping, no
+      // country on the map and no key in the status bar. Meysam caught it with
+      // a screenshot on 2026-10-07: "it shows connected without being
+      // connected".
+      //
+      // Waited for rather than asked once: a tunnel that is genuinely coming
+      // up reports `started` before Android has published its network, and
+      // refusing it in that window would kill a real connection.
+      if (!await _awaitVpn(const Duration(seconds: 4))) {
+        _log.warn('A core was running without a VPN network',
+            detail: 'proxy-mode leftover, not a tunnel; stopping it');
+        _connectedAt = null;
+        await ActiveSessionStore.clear();
+        await _stop();
+        _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+        return;
+      }
+      // A live tunnel is this app's again. A disconnect earlier in this run
+      // left _cancelled set, which would read as "the user stopped it".
+      _cancelled = false;
       final saved = await ActiveSessionStore.load();
       _connectedAt ??= saved?.connectedAt ?? DateTime.now();
       _emit(TunnelSnapshot(
@@ -1436,6 +1460,19 @@ class TunnelService {
   /// would describe that tunnel's path rather than this phone's network. The
   /// caller's job is then to record nothing rather than to record the wrong
   /// thing: an unmeasured network and a measured one must not look alike.
+  /// Waits for Android to publish a VPN network, up to [limit].
+  ///
+  /// The mirror of [_awaitNoVpn]: there the question is whether the old
+  /// tunnel has finally gone, here whether a new one has actually arrived.
+  Future<bool> _awaitVpn(Duration limit) async {
+    final deadline = DateTime.now().add(limit);
+    while (true) {
+      if (await NetworkStatus.vpnActive() == true) return true;
+      if (!DateTime.now().isBefore(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+  }
+
   Future<bool> _awaitNoVpn(Duration limit) async {
     final deadline = DateTime.now().add(limit);
     while (true) {

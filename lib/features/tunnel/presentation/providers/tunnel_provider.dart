@@ -75,11 +75,21 @@ final tunnelSnapshotProvider =
 class TunnelController extends Notifier<TunnelSnapshot> {
   static const int _poolSize = 200;
 
-  /// Deliberately more than the tunnel will ever get through. The TCP sweep in
-  /// TunnelService removes the unreachable ones in parallel for roughly the
-  /// cost of a single timeout, so a bigger shortlist buys more live servers
-  /// without costing the user more waiting.
-  static const int _attempts = 40;
+  /// How many of the fetched pool are swept for a TCP answer.
+  ///
+  /// Deliberately far more than the tunnel will ever get through. The sweep
+  /// runs every check in parallel, so a hundred extra candidates cost the
+  /// same wall clock as forty -- one timeout -- and buy the only thing that
+  /// matters on a blocked network: more servers that actually answer.
+  ///
+  /// It was 40, and 2026-10-06 showed what that cost. Of 232 failures from 46
+  /// installs, 75 were "nothing reachable" reported after **five seconds with
+  /// zero candidates tried**: the sweep had looked at forty servers, found
+  /// none of them answering from Iran, and given up while a hundred and sixty
+  /// fetched ones were never touched. It is also why the app so often worked
+  /// on the second try -- by then the device's own test had found a few live
+  /// servers, and those go to the front of this list.
+  static const int _attempts = 140;
 
   @override
   TunnelSnapshot build() {
