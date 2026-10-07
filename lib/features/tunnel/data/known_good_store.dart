@@ -18,8 +18,15 @@ import '../../configs/domain/vpn_config.dart';
 ///
 /// **Kept per network.** A config that works on a home connection can be dead
 /// on Irancell, and offering it first there would trade one wasted minute for
-/// another. The key is the network the phone was on when the server worked --
-/// which the pre-connect egress reading already reports, at no extra cost.
+/// another. The key is the network the phone was on when the server worked.
+///
+/// That key used to be the ASN from the pre-connect egress reading, which
+/// sounded free and was mostly empty: Iranian networks rarely return one, so
+/// in practice every operator and every Wi-Fi shared a single `unknown`
+/// bucket -- the exact mixing this was built to prevent, and with only six
+/// slots to share. It is now built by `TunnelService._memoryKeyFor`, which
+/// prefers the SIM's MCC+MNC on mobile data and keeps Wi-Fi separate from
+/// cellular whether or not an ASN was read.
 class KnownGoodStore {
   const KnownGoodStore._();
 

@@ -82,13 +82,28 @@ android {
         release {
             signingConfig = if (keystoreProperties["storeFile"] != null) {
                 signingConfigs.getByName("release")
-            } else {
-                // No keystore on this machine. The build still runs so the app
-                // can be tried in release mode, but the result is not
-                // distributable -- and the log says which key was used rather
-                // than leaving it to be discovered later.
+            } else if (project.hasProperty("vernaAllowDebugSigning")) {
+                // Opt-in, for trying release mode on a machine without the
+                // key. The result must never be published: see below.
                 logger.warn("verna: no key.properties -- signing release with the DEBUG key")
                 signingConfigs.getByName("debug")
+            } else {
+                // Used to fall back to the debug key with only a warning in a
+                // log nobody reads. A debug-signed "release" APK is a quiet
+                // disaster: a different signer means every existing install
+                // refuses the update outright (INSTALL_FAILED_UPDATE_
+                // INCOMPATIBLE), and Play Protect's opinion of an app is tied
+                // to its signer, so the whole reputation built up by previous
+                // releases is gone and every user is warned again.
+                //
+                // Fail instead. Pass -PvernaAllowDebugSigning to opt in when
+                // the APK is for this desk only.
+                throw GradleException(
+                    "verna: android/key.properties is missing, so this release " +
+                    "would be signed with the DEBUG key and could not be " +
+                    "published. Restore key.properties, or build with " +
+                    "-PvernaAllowDebugSigning for a local-only APK."
+                )
             }
         }
     }

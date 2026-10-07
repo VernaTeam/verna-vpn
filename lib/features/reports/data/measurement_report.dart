@@ -41,6 +41,7 @@ class MeasurementReport {
     this.ms,
     this.asn,
     this.mobileOperator,
+    this.source,
     this.appVersion = currentAppVersion,
   });
 
@@ -76,6 +77,23 @@ class MeasurementReport {
   /// networks, so this is the operator's only reliable source on mobile data.
   /// Never on Wi-Fi, where the SIM's operator did not carry the measurement.
   final String? mobileOperator;
+
+  /// Which harvesting source this server came from, as the API's `sub` id.
+  ///
+  /// The bot collects from many channels and lists and already records which
+  /// one each config arrived on (`source_channel`); the API hands that back
+  /// to the app as `sub`. It never came back, so the only thing the bot could
+  /// rank from real phones was individual servers -- and free servers die
+  /// daily, which makes that ranking stale by the time it is useful. A source
+  /// does not die daily. Carrying the id back lets "which lists are worth
+  /// collecting from, measured from Iranian phones rather than from a VPS in
+  /// Germany" finally be answered.
+  ///
+  /// Null when Verna supplied the row without a source, and never set for a
+  /// user's own subscription -- those never become reports at all, see
+  /// [forConfig].
+  final int? source;
+
   final String appVersion;
 
   /// The app version plus a zero-padded report-format revision.
@@ -92,7 +110,11 @@ class MeasurementReport {
   /// release produced it. The bot keys on `/rNN` and ignores the prefix, so
   /// raising the version here is safe; raising **r** is not, and needs the
   /// bot session told first.
-  static const String currentAppVersion = '$kAppVersion/r03';
+  ///
+  /// r04 adds [source] and changes nothing else. Additive on both sides: the
+  /// server takes one more nullable column, so rows from older builds store
+  /// exactly as they did.
+  static const String currentAppVersion = '$kAppVersion/r04';
 
   /// A report for [config], or null when it must not or cannot be sent.
   ///
@@ -123,6 +145,7 @@ class MeasurementReport {
       asn: asn,
       transport: transport,
       mobileOperator: transport == 'cellular' ? mobileOperator : null,
+      source: config.builtInSubId,
     );
   }
 
@@ -145,6 +168,7 @@ class MeasurementReport {
         'transport': transport,
         'app_version': appVersion,
         'mobile_operator': mobileOperator,
+        'source': source,
       };
 
   static MeasurementReport? fromJson(Map<String, dynamic> json) {
@@ -163,6 +187,7 @@ class MeasurementReport {
         transport: json['transport'] as String? ?? 'unknown',
         appVersion: json['app_version'] as String? ?? currentAppVersion,
         mobileOperator: json['mobile_operator'] as String?,
+        source: json['source'] as int?,
       );
     } catch (_) {
       return null;

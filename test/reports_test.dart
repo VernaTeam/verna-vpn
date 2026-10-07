@@ -12,6 +12,7 @@ VpnConfig row(
   VpnConfigType type,
   String content, {
   double? concurrency,
+  int? source,
 }) =>
     VpnConfig(
       id: id,
@@ -22,6 +23,7 @@ VpnConfig row(
       flag: '',
       countryCode: 'DE',
       concurrency: concurrency,
+      builtInSubId: source,
     );
 
 void main() {
@@ -123,6 +125,7 @@ void main() {
       expect(json.keys.toSet(), {
         'report_uid', 'config_id', 'server', 'cred_hash', 'protocol', 'stage',
         'outcome', 'ms', 'asn', 'transport', 'app_version', 'mobile_operator',
+        'source',
       });
       expect(json['config_id'], 160176);
       expect(json['outcome'], 'no_traffic');
@@ -157,8 +160,58 @@ void main() {
       // The revision is the part the bot reads, and it is what this test is
       // about. The prefix moves with every release now, so pinning the whole
       // string here would fail on each version bump and say nothing.
-      expect(cellular.appVersion, endsWith('/r03'));
+      expect(cellular.appVersion, endsWith('/r04'));
       expect(cellular.appVersion, startsWith(kAppVersion));
+    });
+
+    test('the source travels so the bot can rank its own lists', () {
+      // Verna's rows arrive with the id of the list they were harvested from.
+      // A server dies within a day; the list it came from does not, which is
+      // the whole reason this field is worth a format revision.
+      final report = MeasurementReport.forConfig(
+        row('160176', VpnConfigType.trojan, trojan, source: 7),
+        stage: ReportStage.tunnel,
+        outcome: ReportOutcome.alive,
+        ms: 120,
+        transport: 'wifi',
+      )!;
+      expect(report.source, 7);
+      expect(report.toJson()['source'], 7);
+      expect(MeasurementReport.fromJson(report.toJson())!.source, 7);
+    });
+
+    test('a row with no source reports none, rather than a made-up one', () {
+      final report = MeasurementReport.forConfig(
+        row('160176', VpnConfigType.trojan, trojan),
+        stage: ReportStage.tunnel,
+        outcome: ReportOutcome.alive,
+        ms: 120,
+        transport: 'wifi',
+      )!;
+      expect(report.source, isNull);
+      expect(report.toJson()['source'], isNull);
+    });
+
+    test('a report stored before r04 still reads back', () {
+      // The queue keeps reports on disk across an update, so the first flush
+      // after this release decodes rows written by the one before it.
+      final json = {
+        'report_uid': '0bbd3a1e-1a2b-4c3d-8e4f-5a6b7c8d9e0f',
+        'config_id': 160176,
+        'server': 'example.com:443',
+        'cred_hash': '0123456789abcdef',
+        'protocol': 'trojan',
+        'stage': 'tunnel',
+        'outcome': 'alive',
+        'ms': 120,
+        'asn': null,
+        'transport': 'wifi',
+        'app_version': '1.0.3/r03',
+        'mobile_operator': null,
+      };
+      final back = MeasurementReport.fromJson(json)!;
+      expect(back.source, isNull);
+      expect(back.appVersion, '1.0.3/r03');
     });
 
     test('every measurement gets its own uid', () {

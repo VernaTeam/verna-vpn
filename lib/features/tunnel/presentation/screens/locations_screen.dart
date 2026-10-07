@@ -667,7 +667,9 @@ class CountryServersScreen extends ConsumerWidget {
       ),
       body: configs.isEmpty
           ? _Message(icon: Icons.public_off_rounded, text: s.noSearchResults)
-          : ListView.builder(
+          : _CountryTestRunner(
+              configs: configs,
+              child: ListView.builder(
               padding: const EdgeInsets.fromLTRB(14, 4, 14, 24),
               itemCount: configs.length,
               itemBuilder: (_, i) => Padding(
@@ -683,17 +685,97 @@ class CountryServersScreen extends ConsumerWidget {
                   ),
                 ),
               ),
+              ),
             ),
     );
   }
 
   /// Working servers first, fastest of those at the top, untested after them,
   /// and the ones this phone proved broken at the bottom.
+  ///
+  /// The untested middle used to be one flat band, so every row this phone
+  /// had not reached yet sat in whatever order the API returned -- which is
+  /// no order at all to a user looking at a country's list. They are now
+  /// ordered among themselves by the server's **tunnel-verified** latency,
+  /// which is a real measurement of a real connection, just not from here.
+  /// It never outranks anything this phone measured itself, and a row with
+  /// only a TCP ping is not treated as measured at all: a CDN edge answers
+  /// that whether or not the proxy behind it is alive.
   int _rank(Map<String, LocalTest> results, VpnConfig config) {
     final result = results[config.id];
-    if (result == null) return 100000;
-    if (!result.works) return 1000000;
-    return result.milliseconds ?? 90000;
+    if (result != null) {
+      if (!result.works) return 1000000;
+      return result.milliseconds ?? 90000;
+    }
+    if (config.hasMeasuredPing) return 100000 + config.pingMs!.clamp(0, 59999);
+    return 200000;
+  }
+}
+
+/// Measures one country's servers when the user opens that country.
+///
+/// The shell's [AutoTestRunner] sweeps the *filtered* list, which is the one
+/// behind the Home screen, and it works through it in runs of four hundred
+/// that any connect cancels. A country opened from Locations is therefore
+/// usually a screen of rows that say "Not tested" -- which is exactly what
+/// Meysam asked about on 2026-10-07: thousands of configs and a handful of
+/// numbers.
+///
+/// This asks the same question for the rows actually on screen, which is a
+/// far smaller set and finishes in seconds. The guards are the shell
+/// runner's, for the same reasons: probing restarts the core, so it must
+/// never run while a tunnel is up or a connect is in flight.
+class _CountryTestRunner extends ConsumerStatefulWidget {
+  const _CountryTestRunner({required this.configs, required this.child});
+
+  final List<VpnConfig> configs;
+  final Widget child;
+
+  @override
+  ConsumerState<_CountryTestRunner> createState() => _CountryTestRunnerState();
+}
+
+class _CountryTestRunnerState extends ConsumerState<_CountryTestRunner> {
+  bool _started = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // After the first frame, so opening the country is instant and the
+    // measuring happens behind the list the user is already reading.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _run());
+  }
+
+  void _run() {
+    if (!mounted || _started) return;
+    final tunnel = ref.read(tunnelSnapshotProvider);
+    if (tunnel.isConnected || tunnel.isBusy) return;
+    if (ref.read(localTestProgressProvider).running) return;
+
+    final results = ref.read(localTestResultsProvider);
+    final pending = [
+      for (final config in widget.configs)
+        if (!results.containsKey(config.id)) config,
+    ];
+    if (pending.isEmpty) return;
+
+    _started = true;
+    ref.read(localTestResultsProvider.notifier).run(pending);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // A run already going when the screen opened has to finish first; this
+    // country's rows are measured the moment it does.
+    ref.listen<LocalTestProgress>(localTestProgressProvider, (previous, next) {
+      if ((previous?.running ?? false) && !next.running) _run();
+    });
+    // And a tunnel coming down is the first chance to measure since it went
+    // up, for a user who connected, disconnected and came back to the list.
+    ref.listen(tunnelSnapshotProvider, (previous, next) {
+      if ((previous?.isConnected ?? false) && !next.isConnected) _run();
+    });
+    return widget.child;
   }
 }
 

@@ -134,6 +134,14 @@ class TunnelService {
   /// the reconnect found nothing remembered, skipped the shortcut, and picked
   /// from a cold sweep -- which is how "the first connection is fast and the
   /// one after a disconnect is slow" happened.
+  ///
+  /// **It is no longer the ASN alone** (Meysam, 2026-10-07: rank by operator).
+  /// An ASN comes back empty from most Iranian networks -- that is why reports
+  /// carry MCC+MNC at all -- so the key fell to `unknown` for exactly the
+  /// users the app exists for, and Irancell, MCI and a home Wi-Fi all shared
+  /// one list of six remembered servers. A server proven on Irancell was
+  /// being offered first on MCI, where it may well be blocked, and the two
+  /// kept evicting each other's entries. See [_memoryKeyFor].
   String? _lastMeasuredNetwork;
   String _memoryKey = 'unknown';
 
@@ -147,6 +155,37 @@ class TunnelService {
   /// have to be told apart -- treating them alike is what made a whole batch
   /// look broken the moment the first result landed.
   final Set<String> _tested = {};
+
+  /// Which bucket this phone's remembered servers belong to right now.
+  ///
+  /// The strongest identifier the phone can actually get, and never one that
+  /// merges two different ways of reaching the internet:
+  ///
+  ///  * on mobile data, the operator's MCC+MNC (`op:43235`). It comes from
+  ///    the OS, costs nothing and -- unlike an ASN -- is readable from every
+  ///    Iranian network, including when no egress reading could be taken at
+  ///    all, which is the state every reconnect starts in.
+  ///  * on Wi-Fi, the ASN when one was read (`wifi:AS31549`), else just
+  ///    `wifi`. A SIM's operator says nothing about a connection it did not
+  ///    carry, so it is deliberately not used here.
+  ///  * anything else, the ASN or `unknown`.
+  ///
+  /// This never leaves the phone -- the key filed with a *report* is still the
+  /// measured ASN or nothing at all (see [_lastMeasuredNetwork]).
+  ///
+  /// Changing the spelling retires the entries stored under the old one. They
+  /// expire after twelve hours anyway, so the cost is at most one cold start
+  /// per network, once.
+  static Future<String> _memoryKeyFor(String? asn) async {
+    final transport = await NetworkStatus.transport();
+    if (transport == 'cellular') {
+      final operator = await NetworkStatus.mobileOperator();
+      if (operator != null) return 'op:$operator';
+      return asn != null ? 'cell:$asn' : 'cell';
+    }
+    if (transport == 'wifi') return asn != null ? 'wifi:$asn' : 'wifi';
+    return asn != null ? 'as:$asn' : 'unknown';
+  }
 
   Stream<TunnelSnapshot> get updates => _controller.stream;
   TunnelSnapshot get snapshot => _snapshot;
@@ -815,10 +854,10 @@ class TunnelService {
         lastAsn = before!.network;
         _lastMeasuredNetwork = before.network;
       }
-      _memoryKey = before?.network ?? _lastMeasuredNetwork ?? 'unknown';
-      if (!canMeasure && _lastMeasuredNetwork != null) {
-        _log.info('Using the last known network',
-            detail: '$_memoryKey, for this phone\'s own server memory');
+      _memoryKey = await _memoryKeyFor(before?.network ?? _lastMeasuredNetwork);
+      if (!canMeasure) {
+        _log.info('Server memory bucket',
+            detail: '$_memoryKey, chosen without a fresh egress reading');
       }
 
       // Servers this phone has already connected through on this network, in
