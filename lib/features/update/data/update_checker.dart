@@ -113,6 +113,17 @@ class UpdateChecker {
   /// the app still gets a written-for-humans summary. A release that forgets
   /// the block gets the generic line instead, which is what it would have
   /// deserved anyway.
+  ///
+  /// **What goes in the block** (Meysam, 2026-10-07, after 1.0.4 shipped three
+  /// lines explaining itself): only a change the user would notice and care
+  /// about -- a new feature, something that now works where it did not, a
+  /// different way of using the app. Bug fixes and cosmetic work are not
+  /// listed one by one; they are the single generic line, exactly as Play
+  /// Store releases write it. The honest default for a release that only
+  /// fixes things is to write nothing here at all and let [whatsNew] fall
+  /// through to the generic line. This is an editorial rule, not a technical
+  /// one -- the parser will happily print four lines of changelog nobody
+  /// asked for.
   static List<String> whatsNew(String? notes, {bool persian = false}) {
     if (notes == null || notes.isEmpty) return const [];
     // The Persian block when the app is in Persian, falling back to the

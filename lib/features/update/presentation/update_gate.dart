@@ -76,8 +76,8 @@ Future<void> showUpdateDialog(
         children: [
           Text(strings.updateBody(release.version),
               style:
-                  TextStyle(color: c.textSecondary, fontSize: 14, height: 1.6)),
-          const SizedBox(height: 14),
+                  TextStyle(color: c.textSecondary, fontSize: 12, height: 1.5)),
+          const SizedBox(height: 12),
           Text(strings.whatsNew,
               style: TextStyle(
                 color: c.textMuted,
@@ -97,11 +97,11 @@ Future<void> showUpdateDialog(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text('·  ',
-                      style: TextStyle(color: c.accent, fontSize: 14, height: 1.5)),
+                      style: TextStyle(color: c.accent, fontSize: 12, height: 1.5)),
                   Expanded(
                     child: Text(line,
                         style: TextStyle(
-                            color: c.textSecondary, fontSize: 13.5, height: 1.5)),
+                            color: c.textSecondary, fontSize: 12, height: 1.5)),
                   ),
                 ],
               ),
