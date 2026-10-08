@@ -14,19 +14,23 @@ publish_to: 'none'
 # 1.0.1 splits 7004 / 8004 / 10004 + universal 10005;
 # 1.0.2 splits 10006 / 11006 / 13006 + universal 13007;
 # 1.0.3 splits 13008 / 14008 / 16008 + universal 16009, then rebuilt as
-#       16010 / 17010 / 19010 + universal 19011 to carry the what's-new dialog.
+#       16010 / 17010 / 19010 + universal 19011 to carry the what's-new dialog;
+# 1.0.4 splits 19012 / 20012 / 22012 + universal 22013;
+# 1.0.5 splits 22014 / 23014 / 25014 + universal 25015.
 #
 # Building each ABI *without* the flag (so they would all share one code) was
 # tried and rejected: the tunnel core arrives as an AAR carrying all three
 # ABIs, `--target-platform` does not filter those, and each file came out at
 # 80 MB instead of 32.
 #
-# The universal APK is built with `--build-number=22013` so it sits above every
-# split in this release.
+# The universal APK is built with `--build-number=25015` so it sits above every
+# split in this release. It is still published even though no real phone needs
+# a 96 MB file: anyone who installed the universal once cannot move to a split
+# afterwards, because a split's code is lower. Dropping it would strand them.
 #
 # Keep the version name equal to kAppVersion in lib/core/app_version.dart: the
 # in-app update check compares it against the newest GitHub tag.
-version: 1.0.4+18012
+version: 1.0.5+21014
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
