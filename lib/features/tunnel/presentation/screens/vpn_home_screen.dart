@@ -14,6 +14,7 @@ import '../format_rate.dart';
 import '../../../stats/data/protected_time_store.dart';
 import '../../domain/tunnel_snapshot.dart';
 import '../providers/own_ip_provider.dart';
+import '../providers/recent_failures_provider.dart';
 import '../providers/tunnel_provider.dart';
 
 /// The connect screen, built to the Aurora design handoff.
@@ -1743,6 +1744,21 @@ class _FailureCard extends ConsumerWidget {
                     ),
                   ),
                 ),
+                // Only when the last failure came within two minutes of the
+                // one before it -- the point where the measured odds fall off
+                // a cliff. On a first failure this says nothing, because a
+                // first retry is a perfectly reasonable thing to do.
+                if (ref.watch(recentFailuresProvider).isRapidRetry) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    strings.blockedRightNow,
+                    style: TextStyle(
+                      color: c.textSecondary,
+                      fontSize: 11,
+                      height: 1.45,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

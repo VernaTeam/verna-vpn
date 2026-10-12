@@ -145,6 +145,28 @@ class TunnelService {
   String? _lastMeasuredNetwork;
   String _memoryKey = 'unknown';
 
+  /// What the current attempt had to work with, for the failure report.
+  ///
+  /// The 1.0.5 review could not explain its own central number -- failures
+  /// averaged 2.1 candidates tried -- because nothing recorded whether the
+  /// shortlist held two servers or eighty of which two answered. Those are
+  /// opposite problems. These three are the funnel: reachable, answered,
+  /// tried.
+  int _shortlistCount = 0;
+  int _probeAnswered = 0;
+
+  /// Whether a server this phone had already carried traffic through led the
+  /// attempt. 1.0.5 changed how that memory is filed and shipped with no way
+  /// to tell whether it helps.
+  bool _usedMemory = false;
+
+  /// Whether a hand-picked server failed and the attempt carried on past it.
+  bool _widened = false;
+
+  /// The protocol of the last server tried, so a failure can say which one
+  /// it was. Sessions have always carried this; failures never did.
+  String? _lastProtocol;
+
   /// Latest urltest results, keyed by outbound tag. Only delays above zero:
   /// the core reports 0 for an outbound it could not reach.
   final Map<String, int> _delays = {};
@@ -767,6 +789,11 @@ class TunnelService {
     // this is where an attempt began, and everything under it belongs to it.
     _connectStartedAt = DateTime.now();
     _attemptsMade = 0;
+    _shortlistCount = 0;
+    _probeAnswered = 0;
+    _usedMemory = false;
+    _widened = false;
+    _lastProtocol = null;
     _log.info(
       'Connect requested',
       detail: '${candidates.length} candidates · '
@@ -818,8 +845,34 @@ class TunnelService {
         unawaited(NotificationPermission.request());
       }
 
-      final usable =
+      var usable =
           candidates.where((c) => tunnelableTypes.contains(c.type)).toList();
+
+      // A server picked by hand gets its own attempt first, alone, exactly as
+      // it did when it was the only candidate -- and then, if it fails, the
+      // search carries on through everything else instead of stopping.
+      //
+      // It used to stop. `connectTo` passed a one-element list, so a chosen
+      // server that did not carry traffic ended the whole connect: 8.9%
+      // success against automatic's 37% over four days, and the user was left
+      // with a failure screen while a hundred untried servers sat behind it.
+      // The pick is still honoured -- it is tried first, every time -- it is
+      // just no longer a cliff.
+      if (userChose && usable.length > 1) {
+        final chosen = usable.first;
+        _log.info('Connecting to chosen server',
+            detail: '${chosen.type.label} ${chosen.countryCode} #${chosen.id}');
+        _attemptsMade = 1;
+        _shortlistCount = usable.length;
+        _lastProtocol = chosen.type.name;
+        if (await _tryCandidate(chosen, 0, null, 'unknown', 1, 1)) return;
+        if (_cancelled) return;
+        _widened = true;
+        _log.info('Chosen server did not carry traffic',
+            detail: 'continuing with ${usable.length - 1} others');
+        usable = usable.sublist(1);
+      }
+
       if (usable.isEmpty) {
         _reportFailure(FailReason.noCandidates);
         _emit(const TunnelSnapshot(
@@ -933,6 +986,10 @@ class TunnelService {
         for (final config in [...rememberedConfigs, ...reachable])
           if (seenIds.add(config.id)) config,
       ].take(_shortlistSize).toList();
+      // Not an overwrite when a hand-picked server was already tried: that
+      // attempt set the size from the full list and this one is what is left.
+      _shortlistCount = max(_shortlistCount, shortlist.length);
+      _usedMemory = rememberedConfigs.isNotEmpty;
       _emit(_snapshot.copyWith(
         phase: TunnelPhase.searching,
         attempt: 0,
@@ -960,6 +1017,7 @@ class TunnelService {
       if (shortlist.length == 1) {
         attempt++;
         total = attempt;
+        _lastProtocol = shortlist.single.type.name;
         if (await _tryCandidate(
             shortlist.single, 0, before, network, attempt, total)) {
           return;
@@ -977,10 +1035,12 @@ class TunnelService {
         if (ranked.isEmpty) continue;
 
         anyAnswered = true;
+        _probeAnswered += ranked.length;
         total = attempt + ranked.length;
         for (final candidate in ranked) {
           if (_cancelled) return;
           attempt++;
+          _lastProtocol = candidate.config.type.name;
           if (await _tryCandidate(candidate.config, candidate.milliseconds,
               before, network, attempt, total)) {
             return;
@@ -996,6 +1056,7 @@ class TunnelService {
         for (final config in blind) {
           if (_cancelled) return;
           attempt++;
+          _lastProtocol = config.type.name;
           if (await _tryCandidate(config, 0, before, network, attempt, total)) {
             return;
           }
@@ -1046,6 +1107,11 @@ class TunnelService {
           ? 0
           : DateTime.now().difference(_connectStartedAt!).inSeconds,
       askedCountry: _lastPreferredCountry,
+      shortlistSize: _shortlistCount,
+      probeAnswered: _probeAnswered,
+      usedMemory: _usedMemory,
+      widened: _widened,
+      protocol: _lastProtocol,
     ));
   }
 
@@ -1174,6 +1240,8 @@ class TunnelService {
         detail: '${after.ip} (${after.country ?? '?'}), '
             '${pingMs == null ? 'latency unknown' : '$pingMs ms'}');
     onTunnelUp?.call(TunnelUpFacts(
+      usedMemory: _usedMemory,
+      widened: _widened,
       config: config,
       picked: _picked,
       connectMs: _connectStartedAt == null

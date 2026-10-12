@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../core/app_version.dart';
 import '../../configs/data/config_api_client.dart';
@@ -61,10 +62,15 @@ class TelemetrySink {
     final operator =
         transport == 'cellular' ? await NetworkStatus.mobileOperator() : null;
 
+    final history = await _retryHistory(failed: false);
+
     final session = SessionRecord(
       uid: newUid(),
       startedAt: DateTime.now(),
       picked: facts.picked,
+      usedMemory: facts.usedMemory,
+      widened: facts.widened,
+      sinceLastFailureS: history.sinceS,
       askedCountry: facts.askedCountry,
       connectMs: facts.connectMs,
       attemptsBefore: facts.attemptsBefore,
@@ -172,12 +178,21 @@ class TelemetrySink {
         .where((r) => r.works)
         .length;
 
+    final history = await _retryHistory(failed: true);
+
     final failure = FailureRecord(
       uid: newUid(),
       at: DateTime.now(),
       reason: facts.reason,
       picked: facts.picked,
       candidatesTried: facts.candidatesTried,
+      shortlistSize: facts.shortlistSize,
+      probeAnswered: facts.probeAnswered,
+      usedMemory: facts.usedMemory,
+      widened: facts.widened,
+      protocol: facts.protocol,
+      sinceLastFailureS: history.sinceS,
+      consecutiveFailures: history.consecutive,
       serversLive: live,
       gaveUpAfterS: facts.gaveUpAfterS,
       askedCountry: facts.askedCountry,
@@ -246,5 +261,65 @@ class TelemetrySink {
           );
       if (!sent) _scheduleRetry(attempt + 1);
     });
+  }
+}
+
+/// How long since this install's last failed connect, and how many failures
+/// it has had in a row.
+///
+/// Kept on the phone rather than reconstructed later. The 2026-10-13 review
+/// had to rebuild it with a self-join over timestamps to find the single
+/// largest effect in the data -- a retry inside two minutes of a failure
+/// succeeded 4.9% of the time against 38.9% after a short wait, and 64% of
+/// all attempts were in that window. A self-join is slow, breaks on clock
+/// skew between devices, and cannot be shown to the user while it matters.
+/// The phone knows both for certain, at no cost.
+///
+/// Survives the process dying, which an in-memory counter would not: the
+/// interesting case is a user who force-closes the app and opens it again,
+/// and that used to read as a fresh attempt.
+class _RetryHistory {
+  const _RetryHistory(this.sinceS, this.consecutive);
+  final int? sinceS;
+  final int consecutive;
+}
+
+const String _kLastFailureAt = 'telemetry_last_failure_at';
+const String _kConsecutiveFailures = 'telemetry_consecutive_failures';
+
+/// Reads the history for the attempt being recorded, then updates it.
+///
+/// [failed] decides the update: a failure extends the streak, a success ends
+/// it. The value returned always describes the state **before** this attempt,
+/// which is what the row is meant to say.
+Future<_RetryHistory> _retryHistory({required bool failed}) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final previous = prefs.getString(_kLastFailureAt);
+    final streak = prefs.getInt(_kConsecutiveFailures) ?? 0;
+
+    int? sinceS;
+    if (previous != null) {
+      final at = DateTime.tryParse(previous);
+      if (at != null) {
+        final seconds = DateTime.now().difference(at).inSeconds;
+        // A negative gap means the clock moved backwards between the two
+        // readings. Unknown is honest; a negative number would be read as a
+        // very fast retry and is the one value that would corrupt the
+        // comparison this field exists for.
+        if (seconds >= 0) sinceS = seconds;
+      }
+    }
+
+    if (failed) {
+      await prefs.setString(_kLastFailureAt, DateTime.now().toIso8601String());
+      await prefs.setInt(_kConsecutiveFailures, streak + 1);
+    } else {
+      await prefs.setInt(_kConsecutiveFailures, 0);
+    }
+    return _RetryHistory(sinceS, failed ? streak + 1 : streak);
+  } catch (_) {
+    // Storage that cannot be read costs two columns, never a report.
+    return const _RetryHistory(null, 0);
   }
 }

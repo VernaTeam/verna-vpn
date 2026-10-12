@@ -126,12 +126,29 @@ class SessionRecord {
     this.bytesUp,
     this.peakKbps,
     this.endedBy,
+    this.usedMemory,
+    this.widened,
+    this.sinceLastFailureS,
   });
 
   final String uid;
   final DateTime startedAt;
   final PickedBy picked;
   final String? askedCountry;
+
+  /// The three fields a success needs so it can be compared with a failure on
+  /// equal terms (r05): whether the phone's own memory led the attempt,
+  /// whether the search went past a hand-picked server that failed, and how
+  /// long since this install last failed.
+  ///
+  /// The last of those is the one that matters most. A retry inside two
+  /// minutes of a failure succeeded 4.9% of the time over four days of 1.0.5,
+  /// against 38.9% after a short wait -- and 64% of all attempts were in that
+  /// window. Carrying the number on the row makes that a GROUP BY instead of
+  /// a self-join on timestamps.
+  final bool? usedMemory;
+  final bool? widened;
+  final int? sinceLastFailureS;
 
   /// From the tap to a verified tunnel, and how many servers were tried first.
   final int? connectMs;
@@ -184,6 +201,10 @@ class SessionRecord {
         if (bytesUp != null) 'bytes_up': bytesUp,
         if (peakKbps != null) 'peak_kbps': peakKbps,
         if (endedBy != null) 'ended_by': endedBy!.wire,
+        if (usedMemory != null) 'used_memory': usedMemory! ? 1 : 0,
+        if (widened != null) 'widened': widened! ? 1 : 0,
+        if (sinceLastFailureS != null)
+          'since_last_failure_s': sinceLastFailureS,
       };
 
   /// For the open-session file: everything, including what is not set yet.
@@ -239,6 +260,13 @@ class FailureRecord {
     this.asn,
     this.country,
     this.appVersion,
+    this.shortlistSize,
+    this.probeAnswered,
+    this.usedMemory,
+    this.widened,
+    this.protocol,
+    this.sinceLastFailureS,
+    this.consecutiveFailures,
   });
 
   final String uid;
@@ -260,6 +288,35 @@ class FailureRecord {
   final String? country;
   final String? appVersion;
 
+  /// The funnel, added for r05: how many servers were reachable, how many of
+  /// those answered the core's probe, and (in [candidatesTried]) how many were
+  /// actually tried. The 1.0.5 review could read only the last of the three
+  /// and so could not say whether 2.1 tried meant a short list or a silent
+  /// one.
+  final int? shortlistSize;
+  final int? probeAnswered;
+
+  /// Whether the phone's own memory of working servers led the attempt.
+  final bool? usedMemory;
+
+  /// Whether a hand-picked server failed and the search carried on past it.
+  final bool? widened;
+
+  /// The protocol of the last server tried. Only sessions carried one before,
+  /// so protocol failure rates could only be computed from successes.
+  final String? protocol;
+
+  /// Seconds since this install's previous failure, and how many failures it
+  /// has had in a row.
+  ///
+  /// Both are reconstructible by joining rows on timestamps -- that is how the
+  /// 2026-10-13 review found that a retry inside two minutes succeeds 4.9% of
+  /// the time against 38.9% after a short wait. Reconstructing it was slow,
+  /// fragile across clock skew, and impossible to put in front of the user.
+  /// The phone knows both for certain.
+  final int? sinceLastFailureS;
+  final int? consecutiveFailures;
+
   Map<String, dynamic> toJson() => {
         'failure_uid': uid,
         'at': stamp(at),
@@ -269,6 +326,14 @@ class FailureRecord {
         if (serversLive != null) 'servers_live': serversLive,
         if (gaveUpAfterS != null) 'gave_up_after_s': gaveUpAfterS,
         if (askedCountry != null) 'asked_country': askedCountry,
+        if (shortlistSize != null) 'shortlist_size': shortlistSize,
+        if (probeAnswered != null) 'probe_answered': probeAnswered,
+        if (usedMemory != null) 'used_memory': usedMemory! ? 1 : 0,
+        if (widened != null) 'widened': widened! ? 1 : 0,
+        if (protocol != null) 'protocol': protocol,
+        if (sinceLastFailureS != null) 'since_last_failure_s': sinceLastFailureS,
+        if (consecutiveFailures != null)
+          'consecutive_failures': consecutiveFailures,
         'transport': transport,
         if (operator != null) 'operator': operator,
         if (asn != null) 'asn': asn,

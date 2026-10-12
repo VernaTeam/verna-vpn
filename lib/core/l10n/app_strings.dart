@@ -247,6 +247,18 @@ class S {
   String get searchCountry => _t('جستجوی کشور', 'Search country');
   String get refresh => _t('به‌روزرسانی', 'Refresh');
   String get retry => _t('تلاش دوباره', 'Try again');
+
+  /// Shown when a connect fails hard on the heels of another one.
+  ///
+  /// Not a scold and not a spinner the user cannot skip: the button still
+  /// works. It is the one true thing the app can say at that moment, from its
+  /// own measurements -- trying again right now is worth about an eighth of
+  /// what trying again in a couple of minutes is worth, because what failed
+  /// was the minute rather than the server.
+  String get blockedRightNow => _t(
+      'شبکه همین حالا سخت‌گیری می‌کند. یکی دو دقیقه صبر کنید؛ خیلی بیشتر از تلاش دوباره جواب می‌دهد.',
+      'The network is blocking heavily right now. Waiting a minute or two '
+          'works far better than trying again.');
   String get noSearchResults =>
       _t('کشوری پیدا نشد', 'No country matches that');
   String get noVerifiedCountries => _t(

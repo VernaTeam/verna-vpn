@@ -311,15 +311,36 @@ class TunnelController extends Notifier<TunnelSnapshot> {
 
   /// Connect to one config the user picked from the list.
   ///
-  /// Same machinery as [connect], with a list of one: it still verifies that
-  /// traffic actually leaves through the tunnel before reporting success. What
-  /// it deliberately does not do is quietly move on to a different server --
-  /// the user asked for this one, so a failure is reported as a failure.
+  /// The chosen server is tried first, alone, and verified the same way as
+  /// any other -- but it is no longer the only thing tried.
+  ///
+  /// It used to be. This passed a list of one, so a pick that did not carry
+  /// traffic ended the connect there: measured over four days on 1.0.5,
+  /// hand-picked attempts succeeded 8.9% of the time against automatic's 37%,
+  /// and the gap was mostly this cliff. The user was shown a failure while a
+  /// hundred untried servers sat behind it. Honouring a choice means trying it
+  /// first, not refusing to try anything else when it dies -- free servers die
+  /// between the moment a row is drawn and the moment it is tapped.
+  ///
+  /// The rest of the list follows in the normal order, and the service marks
+  /// the attempt as widened so the fallback's effect can be measured rather
+  /// than assumed.
   Future<void> connectTo(VpnConfig config) async {
     ref.read(chosenServerProvider.notifier).state = config;
     state = state.copyWith(phase: TunnelPhase.preparing);
     final service = ref.read(tunnelServiceProvider);
-    await service.connect([config], userChose: true);
+
+    // Built the same way [connect] builds its list, so what follows the pick
+    // is the same quality of candidate -- just without the fetch, which would
+    // put a network round trip between the tap and the server the user asked
+    // for.
+    final country = ref.read(preferredCountryProvider);
+    final seen = <String>{config.id};
+    final rest = [
+      for (final c in [..._userCandidates(country), ..._provenCandidates(country)])
+        if (seen.add(c.id)) c,
+    ];
+    await service.connect([config, ...rest], userChose: true);
     unawaited(ref.read(reportSinkProvider).flush());
 
     // A server picked from the list because it tested green, and then carried
