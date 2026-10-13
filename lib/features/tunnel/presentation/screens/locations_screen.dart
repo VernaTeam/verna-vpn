@@ -502,13 +502,26 @@ class _CountryRow extends StatelessWidget {
             Semantics(
               button: true,
               label: strings.allServersIn(name),
+              // 48x48, which is Android's minimum for a thing a finger is
+              // meant to hit. It was 32x40 -- measured on the J7 as 84x105
+              // physical pixels at 2.625x -- and Meysam reported exactly what
+              // that predicts: hard to land on. The faint disc is there for
+              // the same reason; a bare chevron at the edge of a tappable row
+              // does not read as a separate button, so people aimed at the
+              // row and got the country selected instead.
               child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: onOpenServers,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                child: Container(
+                  width: 48,
+                  height: 48,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: c.selectedSurface,
+                    shape: BoxShape.circle,
+                  ),
                   child: Icon(Icons.chevron_right_rounded,
-                      size: 20, color: c.textFaint),
+                      size: 22, color: c.textSecondary),
                 ),
               ),
             ),
@@ -651,11 +664,20 @@ class CountryServersScreen extends ConsumerWidget {
     final c = context.verna;
     final s = ref.watch(stringsProvider);
     final results = ref.watch(localTestResultsProvider);
-    final configs = ref
+    // What the API has in this country, which is what the row's count
+    // promised. The app's own pool is the fallback while that is in flight or
+    // if it fails -- a short list beats an empty screen.
+    final fetched = ref.watch(countryConfigsProvider(code));
+    final pool = ref
         .watch(vernaTextConfigsProvider)
         .where((config) => config.countryCode == code)
-        .toList()
-      ..sort((a, b) => _rank(results, a).compareTo(_rank(results, b)));
+        .toList();
+    final loading = fetched.isLoading && pool.isEmpty;
+    final seen = <String>{};
+    final configs = [
+      for (final config in [...?fetched.valueOrNull, ...pool])
+        if (seen.add(config.id)) config,
+    ]..sort((a, b) => _rank(results, a).compareTo(_rank(results, b)));
 
     return Scaffold(
       backgroundColor: c.background,
@@ -665,7 +687,9 @@ class CountryServersScreen extends ConsumerWidget {
         elevation: 0,
         title: Text(name, style: const TextStyle(fontSize: 17)),
       ),
-      body: configs.isEmpty
+      body: loading
+          ? const Center(child: CircularProgressIndicator())
+          : configs.isEmpty
           ? _Message(icon: Icons.public_off_rounded, text: s.noSearchResults)
           : _CountryTestRunner(
               configs: configs,

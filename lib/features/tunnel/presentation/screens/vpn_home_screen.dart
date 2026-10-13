@@ -723,11 +723,23 @@ class _LocationCard extends ConsumerWidget {
         : (chosen?.flag ?? ''));
     final title =
         code == null || code.isEmpty ? s.autoSelect : s.countryName(code);
+
+    // Connected somewhere the user did not ask for, because nothing in the
+    // country they chose carried traffic. The app says so rather than
+    // quietly swapping the answer: a country is usually chosen for a reason.
+    final elsewhere = connected &&
+        preferred != null &&
+        preferred.isNotEmpty &&
+        code != null &&
+        code.isNotEmpty &&
+        code.toUpperCase() != preferred.toUpperCase();
     // Just the label. The design appends "· Fastest", which only repeats the
     // word underneath it, and appending the protocol instead truncated to
     // "Selected location · Shado…" the moment a Shadowsocks server won -- for
     // a value the Protocol card already shows in full.
-    final subtitle = s.selectedLocation;
+    final subtitle = elsewhere
+        ? s.countryUnavailable(s.countryName(preferred), s.countryName(code))
+        : s.selectedLocation;
 
     return GestureDetector(
       onTap: () => ref.read(shellTabProvider.notifier).select(1),
@@ -747,12 +759,16 @@ class _LocationCard extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Two lines and a warmer colour only when it is carrying
+                  // the "that country had nothing" notice: at eleven pixels
+                  // on one line that sentence would ellipsis away exactly the
+                  // half that matters.
                   Text(
                     subtitle,
-                    maxLines: 1,
+                    maxLines: elsewhere ? 2 : 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: c.textFaint,
+                      color: elsewhere ? c.warn : c.textFaint,
                       fontSize: 11,
                       height: 1.35,
                     ),

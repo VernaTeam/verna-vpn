@@ -55,6 +55,35 @@ final verifiedCountriesProvider =
   return ref.read(repositoryProvider).getVerifiedCountries();
 });
 
+/// Every server the API has in one country, for the country detail screen.
+///
+/// The screen used to filter the app's own pool, which holds a couple of
+/// hundred rows spread across every country. So a row promising "73 verified
+/// servers" -- a number that comes from the server -- opened onto four,
+/// because four was all of that country the pool happened to be carrying.
+/// Meysam, 2026-10-13, on Serbia: 73 on the row, 4 inside, none working.
+///
+/// Fetching the country directly makes the promise true, and it is the same
+/// call the connect path makes.
+///
+/// autoDispose because it is a screen's worth of data, and families keep one
+/// entry per country otherwise.
+final countryConfigsProvider =
+    FutureProvider.autoDispose.family<List<VpnConfig>, String>(
+  (ref, code) async {
+    final page = await ref.read(repositoryProvider).getVerifiedConfigs(
+          country: code,
+          maxAgeHours: 24,
+          limit: 200,
+        );
+    final off = ref.watch(builtInSubscriptionsProvider).disabled;
+    return [
+      for (final c in page.configs)
+        if (c.builtInSubId == null || !off.contains(c.builtInSubId)) c,
+    ];
+  },
+);
+
 /// The country the user asked to exit from, or null for "anywhere".
 ///
 /// A preference, not a filter: a connection in the wrong country still beats
@@ -139,7 +168,17 @@ class TunnelController extends Notifier<TunnelSnapshot> {
   static const List<int> _freshnessWindows = [2, 6, 24];
 
   /// Below this, a window is not worth connecting with -- widen instead.
+  ///
+  /// It is a floor for "did this window return anything at all", **not** a
+  /// target. Treating it as a target is what made picking a country so much
+  /// worse than automatic: see [_fetchCandidates].
   static const int _minUsable = 8;
+
+  /// Enough candidates that widening the window further buys nothing.
+  ///
+  /// The connect only ever tries [_attempts] of them, so collecting past that
+  /// is a round trip spent on rows that will not be reached.
+  static const int _enoughCandidates = _attempts;
 
   /// Fetch a pool, narrow it to what is worth trying, and hand it to the
   /// tunnel.
@@ -207,6 +246,36 @@ class TunnelController extends Notifier<TunnelSnapshot> {
         for (final config in [...mine, ...proven, ...searched])
           if (seen.add(config.id)) config,
       ];
+
+      // And behind all of them, when a country was asked for: everywhere
+      // else.
+      //
+      // A chosen country used to be the end of the list. If none of its
+      // servers carried traffic the connect failed, while hundreds of working
+      // ones sat in other countries -- the same cliff a hand-picked server
+      // had before 1.0.6, one level up. Meysam asked for this on 2026-10-13
+      // after Japan failed, with one condition: say so.
+      //
+      // Every server in the asked-for country is tried first, all of them, so
+      // the preference is honoured rather than approximated. These only come
+      // after that is exhausted, and the app says which country it ended up
+      // in; it does not pretend the request was met.
+      if (country != null && country.isNotEmpty) {
+        try {
+          final elsewhere = const CandidateSelector().select(
+            [
+              for (final c in await _fetchCandidates(repository, null))
+                if (c.builtInSubId == null || !off.contains(c.builtInSubId)) c,
+            ],
+            limit: _attempts,
+          );
+          for (final config in elsewhere) {
+            if (seen.add(config.id)) candidates.add(config);
+          }
+        } catch (_) {
+          // The country's own servers are still worth trying without it.
+        }
+      }
       // The country goes to the service too, not just into the candidate
       // list: the service consults its own memory of what worked on this
       // network first, and that memory has no idea what the user just asked
@@ -294,19 +363,47 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     ConfigRepository repository,
     String? country,
   ) async {
+    // Freshest first, then topped up from wider windows -- not "the first
+    // window that clears a low bar".
+    //
+    // It used to return as soon as a window produced [_minUsable] rows, which
+    // is eight. With no country that never mattered: the two-hour window
+    // comes back full. With a country it was most of the inventory thrown
+    // away. Measured 2026-10-13, Japan: the two-hour window held **24**
+    // configs and the six-hour window **199**, so the loop stopped at 24 and
+    // the connect ran with sixteen candidates after deduplication, against
+    // the hundred and forty automatic mode gets. That is the bulk of why
+    // choosing a country succeeded 17.6% of the time against automatic's 37%
+    // -- not the choice, the starvation behind it.
+    //
+    // Merging keeps what the windows were for. A config verified in the last
+    // two hours is likelier to still work, so it stays at the front; the
+    // older ones follow as depth rather than replacing it.
+    final merged = <VpnConfig>[];
+    final seen = <String>{};
     for (final hours in _freshnessWindows) {
       final page = await repository.getVerifiedConfigs(
         country: country,
         maxAgeHours: hours,
         limit: _poolSize,
       );
-      if (page.configs.length >= _minUsable) return page.configs;
-      if (hours == _freshnessWindows.last && page.configs.isNotEmpty) {
-        return page.configs;
+      for (final config in page.configs) {
+        if (seen.add(config.id)) merged.add(config);
       }
+      // One request is still the common case: with no country the first
+      // window already answers with more than this.
+      if (merged.length >= _enoughCandidates) return merged;
     }
+    if (merged.length >= _minUsable) return merged;
+
+    // Every window was thin -- a quiet period upstream, or a country with
+    // very few servers. An unverified list is a worse experience than a
+    // verified one, and a better one than refusing to connect.
     final page = await repository.getTextConfigs(limit: _poolSize);
-    return page.configs;
+    for (final config in page.configs) {
+      if (seen.add(config.id)) merged.add(config);
+    }
+    return merged;
   }
 
   /// Connect to one config the user picked from the list.

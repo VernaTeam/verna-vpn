@@ -248,6 +248,13 @@ class S {
   String get refresh => _t('به‌روزرسانی', 'Refresh');
   String get retry => _t('تلاش دوباره', 'Try again');
 
+  /// Said when the asked-for country had nothing that worked and the
+  /// connection came up somewhere else. Naming both countries, because the
+  /// quiet version of this is an app that ignores what you asked for.
+  String countryUnavailable(String asked, String used) => _t(
+      'هیچ سروری در $asked جواب نداد. اتصال از $used برقرار شد.',
+      'No server in $asked answered. Connected through $used instead.');
+
   /// Shown when a connect fails hard on the heels of another one.
   ///
   /// Not a scold and not a spinner the user cannot skip: the button still

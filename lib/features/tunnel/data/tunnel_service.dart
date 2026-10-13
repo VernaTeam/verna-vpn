@@ -1370,6 +1370,48 @@ class TunnelService {
   ///
   /// The server can only prove a config is alive from where the server sits.
   /// This answers the question that decides whether the user can use it.
+  /// Reorders a test run so every country is reached early.
+  ///
+  /// The run measures [_batchSize] servers at a time, and the list arrives
+  /// grouped: twenty consecutive rows are usually one or two countries. So
+  /// Locations filled in at roughly **one country per batch**. Measured on a
+  /// J7 from a cold start on 2026-10-13: first country at 45s, three at 64s,
+  /// five at 118s -- about five minutes to fill fifteen, which is what Meysam
+  /// reported ("I was in Locations for five minutes").
+  ///
+  /// Taking one server from each country in turn means the first batch lands
+  /// on up to twenty different countries, so the list is populated after one
+  /// round instead of twenty. The run as a whole takes exactly as long and
+  /// measures exactly the same servers -- only the order changes.
+  ///
+  /// A country's first number is whichever of its servers came up first, so
+  /// it may not be its best. That is fine and self-correcting: the list keeps
+  /// the best measurement per country, so the figures improve as the run
+  /// continues. A number that improves beats an empty row for five minutes.
+  /// Visible to tests only; the behaviour is worth pinning and the method is
+  /// otherwise private.
+  static List<VpnConfig> spreadByCountryForTest(List<VpnConfig> configs) =>
+      _spreadByCountry(configs);
+
+  static List<VpnConfig> _spreadByCountry(List<VpnConfig> configs) {
+    final byCountry = <String, List<VpnConfig>>{};
+    for (final config in configs) {
+      // Unknown countries share one bucket rather than each becoming their
+      // own, which would hand them the whole first round.
+      byCountry.putIfAbsent(config.countryCode.toUpperCase(), () => []).add(config);
+    }
+    if (byCountry.length <= 1) return configs;
+
+    final queues = byCountry.values.toList();
+    final spread = <VpnConfig>[];
+    for (var round = 0; spread.length < configs.length; round++) {
+      for (final queue in queues) {
+        if (round < queue.length) spread.add(queue[round]);
+      }
+    }
+    return spread;
+  }
+
   Future<Map<String, LocalTest>> testCandidates(
     List<VpnConfig> configs, {
     void Function(int done, int total, int working)? onProgress,
@@ -1422,7 +1464,7 @@ class TunnelService {
     onProgress?.call(done, subject.length, 0);
     onBatch?.call(Map<String, LocalTest>.from(results));
 
-    final ordered = reachable.toList();
+    final ordered = _spreadByCountry(reachable.toList());
     var working = 0;
     // No _enoughWorking shortcut here, unlike the connect sweep: stopping at
     // ten leaves the rest of the list saying "Not tested" next to rows that
