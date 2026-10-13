@@ -327,7 +327,16 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     final results = ref.read(localTestResultsProvider);
     if (results.isEmpty) return const [];
 
-    final pool = ref.read(vernaTextConfigsProvider);
+    // Everything this phone has measured, not just the pool. A server proven
+    // inside a country's own screen is not a pool row, so it used to be
+    // invisible here: the country's row showed its ping and the connect went
+    // somewhere else entirely, which is exactly what Meysam saw with Armenia
+    // on 2026-10-13. The pool still provides the configs tested before this
+    // map existed.
+    final pool = <String, VpnConfig>{
+      for (final config in ref.read(vernaTextConfigsProvider)) config.id: config,
+      ...ref.read(localTestResultsProvider.notifier).configById,
+    }.values;
     final working = <({VpnConfig config, int ms})>[];
     for (final config in pool) {
       final result = results[config.id];

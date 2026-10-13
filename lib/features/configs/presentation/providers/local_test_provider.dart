@@ -42,6 +42,38 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
   /// with 260 rows in the list, 212 of them said exactly that.
   static const int _limit = 400;
 
+  /// Which country each tested config belongs to.
+  ///
+  /// Results are keyed by config id, and the country used to be looked up in
+  /// the app's own pool. That broke the moment a country's detail screen
+  /// started fetching its own servers (2026-10-13): those configs are not in
+  /// the pool, so the countries list could not see their results. France
+  /// showed no ping outside and two inside -- Meysam spotted it immediately.
+  ///
+  /// Keeping the country beside the result makes the two screens agree
+  /// whatever path measured the row.
+  final Map<String, String> _countryOf = {};
+
+  /// Country code per tested config id, for anything aggregating results.
+  /// Read, never mutated, by whoever needs it.
+  Map<String, String> get countryById => Map.unmodifiable(_countryOf);
+
+  /// The configs this run measured, by id.
+  ///
+  /// A result is keyed by id, and until now anything wanting the config
+  /// itself looked it up in the app's pool. A country's detail screen fetches
+  /// its own servers, so a row proven *there* was not in the pool and could
+  /// not be found -- which meant the connect never promoted it.
+  ///
+  /// Meysam, 2026-10-13: Armenia showed a ping under 200 ms, connecting went
+  /// to Canada, and only a manual test inside the country made it work. The
+  /// number on the row came from a server the connect could not see.
+  final Map<String, VpnConfig> _testedConfigs = {};
+
+  /// Every config this phone has measured, by id, whatever screen measured
+  /// it. The pool is no longer the limit of what can be promoted.
+  Map<String, VpnConfig> get configById => Map.unmodifiable(_testedConfigs);
+
   @override
   Map<String, LocalTest> build() => const {};
 
@@ -59,6 +91,12 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
     if (subject.isEmpty) return;
     AppLog.instance
         .info('Test run requested', detail: '${subject.length} rows');
+    for (final config in subject) {
+      if (config.countryCode.isNotEmpty) {
+        _countryOf[config.id] = config.countryCode;
+      }
+      _testedConfigs[config.id] = config;
+    }
 
     // Asked before the run: testCandidates refuses while this app's tunnel is
     // up, so any VPN now is another app's, and every probe goes through it.
@@ -125,6 +163,8 @@ class LocalTestController extends Notifier<Map<String, LocalTest>> {
 
   void clear() {
     state = const {};
+    _countryOf.clear();
+    _testedConfigs.clear();
     ref.read(localTestProgressProvider.notifier).set(const LocalTestProgress());
   }
 }

@@ -248,6 +248,9 @@ class S {
   String get refresh => _t('به‌روزرسانی', 'Refresh');
   String get retry => _t('تلاش دوباره', 'Try again');
 
+  String get testBlockedWhileConnected =>
+      _t('برای تست، اول قطع کنید', 'Disconnect first to test');
+
   /// Said when the asked-for country had nothing that worked and the
   /// connection came up somewhere else. Naming both countries, because the
   /// quiet version of this is an app that ignores what you asked for.

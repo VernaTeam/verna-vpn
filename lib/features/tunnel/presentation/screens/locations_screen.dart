@@ -96,18 +96,14 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
                     ),
                   ),
                 ),
-                IconButton(
-                  tooltip: s.refresh,
-                  icon: Icon(Icons.refresh_rounded, color: c.textSecondary),
-                  // Both halves of what is on this screen: the country list
-                  // comes from the server, the pings come from this phone.
-                  // Refreshing only the first left the button looking broken,
-                  // because the numbers people are actually reading are the
-                  // second.
-                  onPressed: () {
+                // It already refreshed both halves -- the country list from
+                // the server and the pings from this phone -- but it said so
+                // nowhere, and the test takes a minute. Meysam, 2026-10-13:
+                // "that refresh button does nothing". It did; it just worked
+                // in silence, which from the outside is the same thing.
+                _TestButton(
+                  onRun: () {
                     ref.invalidate(verifiedCountriesProvider);
-                    final tunnel = ref.read(tunnelSnapshotProvider);
-                    if (tunnel.isConnected || tunnel.isBusy) return;
                     ref
                         .read(localTestResultsProvider.notifier)
                         .run(ref.read(filteredConfigsProvider));
@@ -186,7 +182,7 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
                 onAction: () => ref.invalidate(verifiedCountriesProvider),
               ),
               data: (all) {
-                final list = _filter(all, _query);
+                final list = _sorted(_filter(all, _query), measured);
                 if (list.isEmpty) {
                   return _Message(
                     icon: Icons.public_off_rounded,
@@ -253,13 +249,23 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
   Map<String, ({int? ping, int working})> _measurements() {
     final results = ref.watch(localTestResultsProvider);
     if (results.isEmpty) return const {};
-    final configs = ref.watch(vernaTextConfigsProvider);
+
+    // Walk the results, not the pool. Walking the pool meant a row measured
+    // inside a country screen -- which fetches that country's own servers --
+    // was invisible out here, because it is not a pool row. The controller
+    // keeps the country beside each result; the pool is only a fallback for
+    // ids recorded before it did.
+    final countryOf = ref.read(localTestResultsProvider.notifier).countryById;
+    final fromPool = {
+      for (final config in ref.watch(vernaTextConfigsProvider))
+        config.id: config.countryCode,
+    };
     final out = <String, ({int? ping, int working})>{};
-    for (final config in configs) {
-      final code = config.countryCode;
+    for (final entry in results.entries) {
+      final code = countryOf[entry.key] ?? fromPool[entry.key] ?? '';
       if (code.isEmpty) continue;
-      final result = results[config.id];
-      if (result == null || !result.works) continue;
+      final result = entry.value;
+      if (!result.works) continue;
       final previous = out[code];
       final ms = result.milliseconds;
       final bestSoFar = previous?.ping;
@@ -273,6 +279,48 @@ class _LocationsScreenState extends ConsumerState<LocationsScreen> {
       out[code] = (ping: best, working: (previous?.working ?? 0) + 1);
     }
     return out;
+  }
+
+  /// Countries this phone has measured first, fastest first.
+  ///
+  /// There was no sort here at all. The list came back in the API's order,
+  /// which is by how many servers it holds, and the pings this phone had
+  /// measured were drawn onto rows without ever moving them. So a country
+  /// with 633 ms sat above one with 125 ms, and countries with no ping at all
+  /// sat above every measured one -- which is what Meysam kept reporting, and
+  /// what I kept fixing on the wrong screen: the sort I added on 2026-10-13
+  /// was the one *inside* a country, not this.
+  ///
+  /// Three bands, in order:
+  ///   - measured and working, by the latency measured here. The number on
+  ///     the row and the row's position now say the same thing.
+  ///   - working but with no latency yet: a server carried traffic, the
+  ///     figure has not landed. Better than unknown, worse than a number.
+  ///   - everything else, left in the API's order, which is by server count.
+  ///     Unknown is not the same as bad, so these keep a sensible order of
+  ///     their own rather than being shuffled.
+  List<VerifiedCountry> _sorted(
+    List<VerifiedCountry> all,
+    Map<String, ({int? ping, int working})> measured,
+  ) {
+    int band(VerifiedCountry country) {
+      final m = measured[country.code];
+      if (m == null || m.working == 0) return 2;
+      return m.ping == null ? 1 : 0;
+    }
+
+    final indexed = [
+      for (var i = 0; i < all.length; i++) (country: all[i], at: i),
+    ]..sort((a, b) {
+        final byBand = band(a.country).compareTo(band(b.country));
+        if (byBand != 0) return byBand;
+        final pa = measured[a.country.code]?.ping;
+        final pb = measured[b.country.code]?.ping;
+        if (pa != null && pb != null && pa != pb) return pa.compareTo(pb);
+        // Stable: equal rows keep the order they arrived in.
+        return a.at.compareTo(b.at);
+      });
+    return [for (final e in indexed) e.country];
   }
 
   /// Matches on both the name and the code, so "NL" and "Netherlands" both
@@ -346,7 +394,6 @@ class _FastestRow extends StatelessWidget {
                 ],
               ),
             ),
-            _Radio(selected: selected),
           ],
         ),
       ),
@@ -431,7 +478,9 @@ class _CountryRow extends StatelessWidget {
     // thing most likely to reorder in an RTL line.
     final name = strings.countryName(country.code);
 
-    return GestureDetector(
+    return Semantics(
+      selected: selected,
+      child: GestureDetector(
       onTap: onTap,
       child: Container(
         // `.listrow`: 14px 15px, radius 20, and a cyan border when selected.
@@ -494,8 +543,7 @@ class _CountryRow extends StatelessWidget {
               const SizedBox(width: 8),
               _PingTag(milliseconds: pingMs!, colour: _quality(c, pingMs!)),
             ],
-            const SizedBox(width: 4),
-            _Radio(selected: selected),
+            const SizedBox(width: 6),
             // The way into the individual servers, for anyone who wants to
             // pick one by hand. A chevron rather than a second full-width
             // tap target: the row's job is choosing a country.
@@ -527,6 +575,7 @@ class _CountryRow extends StatelessWidget {
             ),
           ],
         ),
+      ),
       ),
     );
   }
@@ -618,31 +667,14 @@ class _SignalBars extends StatelessWidget {
   }
 }
 
-class _Radio extends StatelessWidget {
-  const _Radio({required this.selected});
-
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.verna;
-    // `.radio`: 22 px, a 1.5 hairline when empty, the accent gradient when on.
-    return Container(
-      width: 22,
-      height: 22,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: selected ? c.accentGradient : null,
-        border: selected
-            ? null
-            : Border.all(color: c.borderStrong, width: 1.5),
-      ),
-      child: selected
-          ? Icon(Icons.check_rounded, size: 14, color: c.onAccent)
-          : null,
-    );
-  }
-}
+// The selected tick used to live here, a 22px disc between the ping and the
+// chevron. Removed 2026-10-13: both rows already turn their surface and their
+// border to the accent colour when selected, so the tick repeated something
+// the row had already said -- and it sat hard against the chevron, which is
+// what Meysam noticed. The row's own colour is the indicator now.
+//
+// Screen readers are told through Semantics(selected:) on the row instead,
+// which is what that flag is for; they never depended on the drawing.
 
 /// Every server the app knows about in one country.
 ///
@@ -686,6 +718,19 @@ class CountryServersScreen extends ConsumerWidget {
         foregroundColor: c.textPrimary,
         elevation: 0,
         title: Text(name, style: const TextStyle(fontSize: 17)),
+        // The same manual test as the locations list, scoped to this country.
+        // Asked for by Meysam on 2026-10-13: open Germany, test it yourself,
+        // take whichever answered. Re-measuring rows that already have a
+        // number is the point -- a server that worked ten minutes ago is a
+        // claim about ten minutes ago.
+        actions: [
+          _TestButton(
+            onRun: () {
+              ref.invalidate(countryConfigsProvider(code));
+              ref.read(localTestResultsProvider.notifier).run(configs);
+            },
+          ),
+        ],
       ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
@@ -800,6 +845,63 @@ class _CountryTestRunnerState extends ConsumerState<_CountryTestRunner> {
       if ((previous?.isConnected ?? false) && !next.isConnected) _run();
     });
     return widget.child;
+  }
+}
+
+/// Runs the on-device test, and shows that it is running.
+///
+/// The progress comes from [localTestProgressProvider], which the run already
+/// published for the connect screen; this only puts it where the button is.
+/// While a run is going the icon becomes a spinner with "Testing 42 of 150",
+/// so the minute it takes reads as work rather than as a dead control.
+///
+/// Disabled while a tunnel is up, because probing restarts the core and would
+/// drop the user's connection to answer a question about a list. It says why
+/// rather than simply not responding.
+class _TestButton extends ConsumerWidget {
+  const _TestButton({required this.onRun});
+
+  final VoidCallback onRun;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final c = context.verna;
+    final s = ref.watch(stringsProvider);
+    final progress = ref.watch(localTestProgressProvider);
+    final tunnel = ref.watch(tunnelSnapshotProvider);
+    final busy = tunnel.isConnected || tunnel.isBusy;
+
+    if (progress.running) {
+      return Padding(
+        padding: const EdgeInsetsDirectional.only(end: 12),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2, color: c.accent),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              s.testingProgress(progress.done, progress.total),
+              style: TextStyle(color: c.textSecondary, fontSize: 11),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return IconButton(
+      tooltip: busy ? s.testBlockedWhileConnected : s.testServers,
+      icon: Icon(Icons.refresh_rounded,
+          color: busy ? c.textFaint : c.textSecondary),
+      onPressed: busy
+          ? () => ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(s.testBlockedWhileConnected)),
+              )
+          : onRun,
+    );
   }
 }
 
