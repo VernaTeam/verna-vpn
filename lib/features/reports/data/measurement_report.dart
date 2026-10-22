@@ -20,6 +20,31 @@ enum ReportStage { probe, tunnel }
 /// and carries nothing is the signature of an oversubscribed account.
 enum ReportOutcome { alive, noTraffic, unreachable }
 
+/// Where a `tunnel`-stage attempt died.
+///
+/// `stage: tunnel` has never meant "the VPN was up". A candidate is checked
+/// through a **local proxy port first**, deliberately, and no VPN interface
+/// is requested until that passes -- it costs no TUN, no route and no key in
+/// the status bar to find out a server is dead. Both halves reported
+/// `no_traffic`, so one label covered two different events.
+///
+/// The config bot found this the expensive way (2026-10-22): its demotion
+/// rule counts every non-`alive` tunnel row as a dead tunnel, so a server
+/// that merely failed a proxy check -- possibly on an app-side timeout -- was
+/// demoted as though its tunnel had carried nothing. 232 configs were
+/// demoted, 38 of them with at least one `alive` report.
+///
+/// Null on anything that is not a `no_traffic` tunnel row.
+enum FailStage {
+  /// Failed the local proxy check. **No VPN was ever created.** Weaker
+  /// evidence: the server may be dead, or the request may have timed out.
+  proxy,
+
+  /// The VPN interface was up and the route carried nothing back. This is the
+  /// strong negative: a real tunnel that did not work.
+  tunnel,
+}
+
 /// One measurement from this phone, as verna-api accepts it.
 ///
 /// The shape is agreed with the config bot, which reads these rows and
@@ -42,6 +67,7 @@ class MeasurementReport {
     this.asn,
     this.mobileOperator,
     this.source,
+    this.failStage,
     this.appVersion = currentAppVersion,
   });
 
@@ -94,6 +120,10 @@ class MeasurementReport {
   /// [forConfig].
   final int? source;
 
+  /// For a `no_traffic` tunnel row, which half of the attempt failed.
+  /// Null everywhere else. See [FailStage].
+  final FailStage? failStage;
+
   final String appVersion;
 
   /// The app version plus a zero-padded report-format revision.
@@ -111,10 +141,10 @@ class MeasurementReport {
   /// raising the version here is safe; raising **r** is not, and needs the
   /// bot session told first.
   ///
-  /// r04 adds [source] and changes nothing else. Additive on both sides: the
-  /// server takes one more nullable column, so rows from older builds store
-  /// exactly as they did.
-  static const String currentAppVersion = '$kAppVersion/r04';
+  /// r04 adds [source]; r05 adds [failStage]. Additive on both sides: the
+  /// server takes one more nullable column each time, so rows from older
+  /// builds store exactly as they did.
+  static const String currentAppVersion = '$kAppVersion/r05';
 
   /// A report for [config], or null when it must not or cannot be sent.
   ///
@@ -128,6 +158,7 @@ class MeasurementReport {
     int? ms,
     String? asn,
     String? mobileOperator,
+    FailStage? failStage,
   }) {
     final id = int.tryParse(config.id);
     if (id == null) return null;
@@ -146,6 +177,8 @@ class MeasurementReport {
       transport: transport,
       mobileOperator: transport == 'cellular' ? mobileOperator : null,
       source: config.builtInSubId,
+      // Only ever meaningful for the outcome it describes.
+      failStage: outcome == ReportOutcome.noTraffic ? failStage : null,
     );
   }
 
@@ -169,6 +202,7 @@ class MeasurementReport {
         'app_version': appVersion,
         'mobile_operator': mobileOperator,
         'source': source,
+        'fail_stage': failStage?.name,
       };
 
   static MeasurementReport? fromJson(Map<String, dynamic> json) {
@@ -188,6 +222,11 @@ class MeasurementReport {
         appVersion: json['app_version'] as String? ?? currentAppVersion,
         mobileOperator: json['mobile_operator'] as String?,
         source: json['source'] as int?,
+        failStage: switch (json['fail_stage']) {
+          'proxy' => FailStage.proxy,
+          'tunnel' => FailStage.tunnel,
+          _ => null,
+        },
       );
     } catch (_) {
       return null;

@@ -21,11 +21,12 @@ final tunnelServiceProvider = Provider<TunnelService>((ref) {
   final service = TunnelService();
   // A real connection is the strongest evidence the app has about a server,
   // so its outcome is reported like the list's own test (see ReportSink).
-  service.onTunnelResult =
-      (config, stage, outcome, ms, asn) => ref.read(reportSinkProvider).submit(
+  service.onTunnelResult = (config, stage, outcome, ms, asn, failStage) =>
+      ref.read(reportSinkProvider).submit(
             results: [(config: config, outcome: outcome, ms: ms)],
             stage: stage,
             asn: asn,
+            failStage: failStage,
           );
   // What the connection was like, for the telemetry tables. The service
   // reports facts; the sink knows the transport, the SIM, the country and

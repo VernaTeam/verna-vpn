@@ -125,7 +125,7 @@ void main() {
       expect(json.keys.toSet(), {
         'report_uid', 'config_id', 'server', 'cred_hash', 'protocol', 'stage',
         'outcome', 'ms', 'asn', 'transport', 'app_version', 'mobile_operator',
-        'source',
+        'source', 'fail_stage',
       });
       expect(json['config_id'], 160176);
       expect(json['outcome'], 'no_traffic');
@@ -160,7 +160,7 @@ void main() {
       // The revision is the part the bot reads, and it is what this test is
       // about. The prefix moves with every release now, so pinning the whole
       // string here would fail on each version bump and say nothing.
-      expect(cellular.appVersion, endsWith('/r04'));
+      expect(cellular.appVersion, endsWith('/r05'));
       expect(cellular.appVersion, startsWith(kAppVersion));
     });
 
@@ -212,6 +212,70 @@ void main() {
       final back = MeasurementReport.fromJson(json)!;
       expect(back.source, isNull);
       expect(back.appVersion, '1.0.3/r03');
+    });
+
+    test('a no_traffic row says which half of the attempt died', () {
+      // `stage: tunnel` never meant the VPN was up: a candidate is checked
+      // through a local proxy port first, and no VPN interface is requested
+      // until that passes. Both halves reported no_traffic, so the config
+      // bot was demoting servers for failing a check that never involved a
+      // tunnel -- 232 demoted, 38 of them with an alive report.
+      final cfg = row('160176', VpnConfigType.trojan, trojan);
+      final beforeVpn = MeasurementReport.forConfig(cfg,
+          stage: ReportStage.tunnel,
+          outcome: ReportOutcome.noTraffic,
+          transport: 'wifi',
+          failStage: FailStage.proxy)!;
+      final realTunnel = MeasurementReport.forConfig(cfg,
+          stage: ReportStage.tunnel,
+          outcome: ReportOutcome.noTraffic,
+          transport: 'wifi',
+          failStage: FailStage.tunnel)!;
+
+      expect(beforeVpn.toJson()['fail_stage'], 'proxy');
+      expect(realTunnel.toJson()['fail_stage'], 'tunnel');
+      expect(MeasurementReport.fromJson(beforeVpn.toJson())!.failStage,
+          FailStage.proxy);
+      expect(MeasurementReport.fromJson(realTunnel.toJson())!.failStage,
+          FailStage.tunnel);
+    });
+
+    test('it is set for no outcome but no_traffic', () {
+      // A live server has no failure stage, and neither has a server that
+      // refused a TCP connection -- there was no attempt to place.
+      final cfg = row('160176', VpnConfigType.trojan, trojan);
+      for (final outcome in [ReportOutcome.alive, ReportOutcome.unreachable]) {
+        final report = MeasurementReport.forConfig(cfg,
+            stage: ReportStage.tunnel,
+            outcome: outcome,
+            ms: 120,
+            transport: 'wifi',
+            // Passed deliberately: the constructor must drop it anyway.
+            failStage: FailStage.tunnel)!;
+        expect(report.failStage, isNull, reason: '${outcome.name}');
+        expect(report.toJson()['fail_stage'], isNull);
+      }
+    });
+
+    test('a report stored before r05 still reads back', () {
+      final json = {
+        'report_uid': '0bbd3a1e-1a2b-4c3d-8e4f-5a6b7c8d9e0f',
+        'config_id': 160176,
+        'server': 'example.com:443',
+        'cred_hash': '0123456789abcdef',
+        'protocol': 'trojan',
+        'stage': 'tunnel',
+        'outcome': 'no_traffic',
+        'ms': null,
+        'asn': null,
+        'transport': 'wifi',
+        'app_version': '1.0.7/r04',
+        'mobile_operator': null,
+        'source': 7,
+      };
+      final back = MeasurementReport.fromJson(json)!;
+      expect(back.failStage, isNull);
+      expect(back.source, 7);
     });
 
     test('every measurement gets its own uid', () {

@@ -124,6 +124,7 @@ class ReportSink {
     required List<({VpnConfig config, ReportOutcome outcome, int? ms})> results,
     required ReportStage stage,
     String? asn,
+    FailStage? failStage,
   }) async {
     if (results.isEmpty) return;
     try {
@@ -148,6 +149,7 @@ class ReportSink {
             asn: asn,
             transport: transport,
             mobileOperator: operator,
+            failStage: failStage,
           )
               case final MeasurementReport report)
             report,

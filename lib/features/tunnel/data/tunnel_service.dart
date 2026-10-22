@@ -97,6 +97,7 @@ class TunnelService {
     ReportOutcome outcome,
     int? ms,
     String? asn,
+    FailStage? failStage,
   )? onTunnelResult;
 
   /// Told what a connection was like, so the telemetry layer can record it.
@@ -949,7 +950,7 @@ class TunnelService {
         for (final config in usable) {
           if (accepted.contains(config.id)) continue;
           onTunnelResult?.call(config, ReportStage.probe,
-              ReportOutcome.unreachable, null, before?.network);
+              ReportOutcome.unreachable, null, before?.network, null);
         }
       }
 
@@ -1152,8 +1153,11 @@ class TunnelService {
             if (failures.isNotEmpty) failures.join('; '),
           ].join(' -- '));
       await KnownGoodStore.forget(config.id, _memoryKey);
+      // No VPN was ever requested here -- the proxy check is deliberately
+      // first. Reported as such so the bot can weigh it below a real tunnel
+      // failure instead of treating the two alike.
       onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.noTraffic,
-          null, network == 'unknown' ? null : network);
+          null, network == 'unknown' ? null : network, FailStage.proxy);
       return false;
     }
     if (_cancelled) return false;
@@ -1201,8 +1205,9 @@ class TunnelService {
       // A remembered server that has stopped working must not keep being
       // tried first, or the shortcut becomes the slow path.
       await KnownGoodStore.forget(config.id, _memoryKey);
+      // The route was genuinely up and carried nothing. The strong negative.
       onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.noTraffic,
-          null, network == 'unknown' ? null : network);
+          null, network == 'unknown' ? null : network, FailStage.tunnel);
       await _stop();
       return false;
     }
@@ -1216,7 +1221,7 @@ class TunnelService {
 
     await KnownGoodStore.remember(config, _memoryKey, milliseconds: pingMs);
     onTunnelResult?.call(config, ReportStage.tunnel, ReportOutcome.alive,
-        pingMs, network == 'unknown' ? null : network);
+        pingMs, network == 'unknown' ? null : network, null);
 
     _connectedAt = DateTime.now();
     unawaited(ActiveSessionStore.save(ActiveSession(
