@@ -207,11 +207,52 @@ class TelemetrySink {
     unawaited(flush());
   }
 
-  /// Closes a session the last run of the app never got to finish.
+  /// Closes a session the last run of the app never got to finish -- or,
+  /// when its tunnel is still running, picks it back up.
   Future<void> recoverAbandoned() async {
     final session = await OpenSessionStore.takeAbandoned();
     if (session == null) return;
     if (!await _allowed()) return;
+
+    // Still running: the same tunnel, adopted a moment ago by restore().
+    //
+    // This used to be closed as `app_killed` regardless, and that was wrong in
+    // the most expensive way. Leaving the app after connecting is the normal
+    // thing to do -- tap Connect, see Protected, go to Telegram -- and the VPN
+    // service outlives the Flutter engine. The session on disk was frozen at
+    // its first save: the connect moment, before any traffic. So on the next
+    // launch a tunnel that had run for hours was recorded as one row of
+    // "4.7 s, 0 bytes, app_killed", restore() adopted the live tunnel without
+    // opening a new session, and the rest of its life was never recorded at
+    // all.
+    //
+    // Found 2026-10-30 from a peer observation: 306 of 1,193 sessions moved
+    // zero bytes. Of the zero-byte ones over fourteen days, 89 were
+    // `app_killed` at 4.7 s on average -- under the 30 s heartbeat, i.e. the
+    // first save and nothing after. Those were very likely the most-used
+    // sessions in the data, recorded as the least.
+    //
+    // Resumed, it keeps its original start, so the duration at close is the
+    // real one; and `observe()` refills the byte counts from the core's own
+    // totals, which ran on with the service.
+    if (_ref.read(tunnelServiceProvider).snapshot.isConnected) {
+      session.endedBy = null;
+      session.durationS = null;
+      _open = session;
+      _lastSeenEpoch = DateTime.now().millisecondsSinceEpoch;
+      await OpenSessionStore.save(session, lastSeenEpoch: _lastSeenEpoch);
+      _heartbeat?.cancel();
+      _heartbeat = Timer.periodic(OpenSessionStore.heartbeat, (_) {
+        final current = _open;
+        if (current == null) return;
+        _lastSeenEpoch = DateTime.now().millisecondsSinceEpoch;
+        unawaited(
+            OpenSessionStore.save(current, lastSeenEpoch: _lastSeenEpoch));
+      });
+      AppLog.instance.info('Resumed an unfinished session',
+          detail: 'its tunnel is still running');
+      return;
+    }
     AppLog.instance.info('Recovered an unfinished session',
         detail: '${session.durationS ?? 0}s, ended by app_killed');
     await _ref.read(telemetryQueueProvider).addSession(session);

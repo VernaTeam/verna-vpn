@@ -829,12 +829,27 @@ class TunnelService {
         return;
       }
 
+      // Timed, because "denied" covers two situations with different fixes.
+      // A person needs well over a second to read Android's consent dialog
+      // and dismiss it; a refusal faster than that means the dialog never
+      // appeared and Android said no on its own, which is what another VPN
+      // app set to Always-on does to every other app.
+      final asked = DateTime.now();
       if (!await _client.requestVPNPermission()) {
-        _log.warn('Connect stopped', detail: 'VPN permission was not granted');
+        final instant =
+            DateTime.now().difference(asked) < const Duration(milliseconds: 900);
+        _log.warn('Connect stopped',
+            detail: instant
+                ? 'VPN permission refused by Android without a dialog'
+                : 'VPN permission was not granted');
+        // One telemetry reason for both: gave_up_after_s already separates
+        // them, and a new reason would need a server change for nothing.
         _reportFailure(FailReason.permissionDenied);
-        _emit(const TunnelSnapshot(
+        _emit(TunnelSnapshot(
           phase: TunnelPhase.failed,
-          failure: TunnelFailure.permissionDenied,
+          failure: instant
+              ? TunnelFailure.permissionBlocked
+              : TunnelFailure.permissionDenied,
         ));
         return;
       }
@@ -1009,6 +1024,7 @@ class TunnelService {
       // the whole shortlist took ten minutes to report a failure the probe
       // had already reported.
       var attempt = 0;
+      var checked = 0;
       int total = min<int>(shortlist.length, _blindAttempts);
 
       // A one-member group reports nothing at all -- measured on an A54,
@@ -1033,6 +1049,11 @@ class TunnelService {
             shortlist.sublist(start, min(start + _batchSize, shortlist.length));
         final ranked = await _rank(batch, retryOnlyIfSilent: true);
         if (_cancelled) return;
+        // Published whether or not anyone answered: a silent batch is still
+        // work the user waited through, and it is the case that looked most
+        // like nothing happening.
+        checked += batch.length;
+        _emit(_snapshot.copyWith(checked: checked));
         if (ranked.isEmpty) continue;
 
         anyAnswered = true;

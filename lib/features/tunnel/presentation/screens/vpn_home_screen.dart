@@ -558,7 +558,13 @@ class _PowerButton extends StatelessWidget {
   double _progress() {
     if (snapshot.isConnected) return 1;
     if (snapshot.phase == TunnelPhase.searching && snapshot.total > 0) {
-      return (snapshot.attempt / snapshot.total).clamp(0.04, 1);
+      // Whichever has moved further. The probe rounds come first and take
+      // most of the wait; the ring used to sit at its floor through all of
+      // them because only a tried server moved it.
+      final done = snapshot.attempt > snapshot.checked
+          ? snapshot.attempt
+          : snapshot.checked;
+      return (done / snapshot.total).clamp(0.04, 1);
     }
     if (snapshot.isBusy) return 0.08;
     return 0;
@@ -674,7 +680,11 @@ class _StatusLine extends StatelessWidget {
           Directionality(
             textDirection: TextDirection.ltr,
             child: Text(
-              '${snapshot.attempt}/${snapshot.total}',
+              // Checked during the probe rounds, tried once trying begins --
+              // "0/132" for twenty seconds read as a stalled app.
+              snapshot.attempt == 0 && snapshot.checked > 0
+                  ? '${snapshot.checked}/${snapshot.total}'
+                  : '${snapshot.attempt}/${snapshot.total}',
               style: TextStyle(
                 fontFamily: VernaType.mono,
                 color: c.warn,
@@ -1760,6 +1770,23 @@ class _FailureCard extends ConsumerWidget {
                     ),
                   ),
                 ),
+                // What to do, for the two failures whose fix is not "try
+                // again". Shown in place of the rapid-retry line: retrying
+                // after a permission refusal is not a question of timing.
+                if (snapshot.failure == TunnelFailure.permissionDenied ||
+                    snapshot.failure == TunnelFailure.permissionBlocked) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    snapshot.failure == TunnelFailure.permissionBlocked
+                        ? strings.permissionBlockedHelp
+                        : strings.permissionDeniedHelp,
+                    style: TextStyle(
+                      color: c.textSecondary,
+                      fontSize: 11,
+                      height: 1.45,
+                    ),
+                  ),
+                ] else
                 // Only when the last failure came within two minutes of the
                 // one before it -- the point where the measured odds fall off
                 // a cliff. On a first failure this says nothing, because a
@@ -1854,6 +1881,7 @@ String statusCode(TunnelSnapshot s) => switch (s.phase) {
 
 String failureTitle(S s, TunnelFailure failure) => switch (failure) {
       TunnelFailure.permissionDenied => s.permissionDenied,
+      TunnelFailure.permissionBlocked => s.permissionBlocked,
       TunnelFailure.noInternet => s.noInternet,
       TunnelFailure.fetchFailed => s.fetchFailed,
       TunnelFailure.noCandidates => s.noCandidates,
@@ -1867,6 +1895,7 @@ String failureDetail(TunnelSnapshot s) {
   }
   return switch (s.failure) {
     TunnelFailure.permissionDenied => 'VPN_PERMISSION_DENIED',
+    TunnelFailure.permissionBlocked => 'VPN_BLOCKED · another app is Always-on',
     TunnelFailure.noInternet => 'NO_NETWORK · Wi-Fi and mobile data are off',
     TunnelFailure.fetchFailed => 'SERVER_LIST_UNREACHABLE',
     TunnelFailure.noCandidates => 'NO_USABLE_CONFIGS',

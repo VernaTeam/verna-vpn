@@ -33,6 +33,17 @@ enum TunnelFailure {
   /// The user declined Android's VPN consent dialog.
   permissionDenied,
 
+  /// Android refused VPN permission without showing the dialog at all.
+  ///
+  /// Told apart from [permissionDenied] by time: the refusal came back in
+  /// under a second, faster than anyone can read a system dialog and dismiss
+  /// it. Over eight days of 1.0.8, 38 permission failures from 5 installs all
+  /// had `gave_up_after_s = 0` -- people were not declining, Android was. The
+  /// usual cause is another VPN app set to Always-on, which makes Android
+  /// refuse every other app silently. "Permission denied" told those users
+  /// nothing they could act on.
+  permissionBlocked,
+
   /// The phone has no Wi-Fi and no mobile data, so there is nothing to
   /// search. Said at once rather than discovered after a full search.
   noInternet,
@@ -62,6 +73,7 @@ class TunnelSnapshot {
     this.errorDetail,
     this.attempt = 0,
     this.total = 0,
+    this.checked = 0,
     this.uploadTotal = 0,
     this.downloadTotal = 0,
     this.active,
@@ -84,6 +96,16 @@ class TunnelSnapshot {
   /// Progress through the candidate list, 1-based. Zero when not searching.
   final int attempt;
   final int total;
+
+  /// How many candidates have finished their probe.
+  ///
+  /// [attempt] only moves when a server is actually tried, and most of a
+  /// search happens before that: the probe rounds, which on a slow network
+  /// are the whole wait. So the counter read "0/132" for twenty seconds and
+  /// the ring sat empty, and people gave up -- `cancelled` was the second
+  /// failure reason on 1.0.8, 96 of 374, at 23 seconds, with only one server
+  /// tried on average. This lets the screen show the work it is doing.
+  final int checked;
 
   /// Bytes moved since this tunnel came up, as the core counts them.
   ///
@@ -124,6 +146,7 @@ class TunnelSnapshot {
     String? errorDetail,
     int? attempt,
     int? total,
+    int? checked,
     int? uploadTotal,
     int? downloadTotal,
     VpnConfig? active,
@@ -142,6 +165,7 @@ class TunnelSnapshot {
       errorDetail: errorDetail ?? this.errorDetail,
       attempt: attempt ?? this.attempt,
       total: total ?? this.total,
+      checked: checked ?? this.checked,
       uploadTotal: uploadTotal ?? this.uploadTotal,
       downloadTotal: downloadTotal ?? this.downloadTotal,
       active: clearActive ? null : (active ?? this.active),

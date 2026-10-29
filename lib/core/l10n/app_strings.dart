@@ -196,6 +196,23 @@ class S {
   String get otherServer => _t('سرور دیگر', 'Other server');
   String get permissionDenied =>
       _t('اجازهٔ VPN داده نشد', 'VPN permission denied');
+
+  /// What to do about it. A declined dialog is fixed by not declining it --
+  /// the old screen said only "permission denied" and a code, and five
+  /// people hit it 38 times over eight days of 1.0.8.
+  String get permissionDeniedHelp => _t(
+      'اندروید یک بار اجازه می‌خواهد. دوباره «اتصال» را بزنید و در پنجره‌ای که باز می‌شود «تأیید» را انتخاب کنید.',
+      'Android asks once. Tap Connect again and choose OK in the window that opens.');
+
+  /// Android refused without asking. The fix is outside this app, so the
+  /// message has to name where.
+  String get permissionBlocked => _t(
+      'اندروید بدون پرسیدن اجازه نداد',
+      'Android blocked the VPN without asking');
+
+  String get permissionBlockedHelp => _t(
+      'احتمالاً یک فیلترشکن دیگر روی «همیشه روشن» تنظیم شده. در تنظیمات گوشی › شبکه › VPN آن را خاموش کنید.',
+      'Another VPN app is probably set to Always-on. Turn it off in Settings › Network › VPN.');
   String get fetchFailed =>
       _t('لیست سرورها دریافت نشد', 'Could not fetch the server list');
   String get noInternet => _t('اینترنت وصل نیست', 'No internet connection');
