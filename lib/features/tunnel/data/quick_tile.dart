@@ -29,7 +29,9 @@ class QuickTile {
     });
   }
 
-  static void detach() => _channel.setMethodCallHandler(null);
+  /// Forgets what was last sent, so the next [publish] goes through even if
+  /// it says the same: the tile may have shown its own guess in between.
+  static void forgetPublished() => _lastPublished = null;
 
   /// Tells the tile what the tunnel is doing. The snapshot stream ticks every
   /// second while connected, so only a change crosses the channel.
@@ -47,6 +49,18 @@ class QuickTile {
           'publish', {'state': state, 'busyLabel': busyLabel});
     } on PlatformException {
       // The tile reads the service itself when it has no word from here.
+    } on MissingPluginException {
+      // Same.
+    }
+  }
+
+  /// A short message for someone who started a connect from the tile and is
+  /// not looking at the app.
+  static Future<void> toast(String text) async {
+    try {
+      await _channel.invokeMethod<void>('toast', {'text': text});
+    } on PlatformException {
+      // Then the tile going back to off is the only answer.
     } on MissingPluginException {
       // Same.
     }

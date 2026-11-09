@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import '../../../settings/data/app_preferences.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../configs/data/config_repository.dart';
@@ -19,6 +20,14 @@ import '../../domain/tunnel_snapshot.dart';
 
 final tunnelServiceProvider = Provider<TunnelService>((ref) {
   final service = TunnelService();
+  // How the next tunnel is routed, kept current from Settings. Read at each
+  // tunnel start, so a change takes effect on the next connect.
+  ref.listen<AsyncValue<AppPreferences>>(appPreferencesProvider, (_, next) {
+    final prefs = next.valueOrNull;
+    if (prefs == null) return;
+    service.bypassApps = prefs.bypassApps;
+    service.lanDirect = prefs.lanDirect;
+  }, fireImmediately: true);
   // A real connection is the strongest evidence the app has about a server,
   // so its outcome is reported like the list's own test (see ReportSink).
   service.onTunnelResult = (config, stage, outcome, ms, asn, failStage) =>
@@ -106,6 +115,10 @@ final tunnelSnapshotProvider =
     NotifierProvider<TunnelController, TunnelSnapshot>(TunnelController.new);
 
 class TunnelController extends Notifier<TunnelSnapshot> {
+  /// Done once a tunnel left running by an earlier run has been adopted or
+  /// ruled out. A connect started before that could tear the live one down.
+  Future<void> restored = Future<void>.value();
+
   static const int _poolSize = 200;
 
   /// How many of the fetched pool are swept for a TCP answer.
@@ -142,7 +155,7 @@ class TunnelController extends Notifier<TunnelSnapshot> {
     ref.onDispose(() => service.onRestoredTunnelDead = null);
     // The tunnel can already be up from a previous run of this screen -- or of
     // this process. Ask, rather than assuming a fresh start means disconnected.
-    Future.microtask(() async {
+    restored = Future.microtask(() async {
       // The country the user picked last time, before anything tries to
       // connect: a restored preference that arrives after the first connect
       // would be a preference the app ignored once and then obeyed.

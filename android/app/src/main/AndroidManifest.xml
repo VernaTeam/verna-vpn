@@ -98,6 +98,11 @@
             <action android:name="android.intent.action.VIEW"/>
             <data android:scheme="tuic"/>
         </intent>
+        <!-- Launchable apps, for the split-tunneling list -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
+        </intent>
         <!-- Open https links (Telegram channel) -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>

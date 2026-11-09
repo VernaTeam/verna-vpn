@@ -3,6 +3,7 @@ package ir.vernaservice.vpn
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -80,10 +81,8 @@ object TileBridge {
 /**
  * The on/off button in the phone's Quick Settings panel, next to Wi-Fi.
  *
- * Off, a tap opens the app and starts the same connect as its big button. That
- * cannot happen from here: choosing a server, asking for VPN consent and
- * verifying the tunnel all live in Dart, and a search can end in a failure
- * that needs a screen to explain it.
+ * Off, a tap starts the same connect as the app's big button, without opening
+ * the app (see [connect]); a failure is reported as a toast.
  *
  * On, a tap stops the tunnel without opening anything. Through Dart when an
  * engine is alive, so the session is closed as the user's own; through the
@@ -110,7 +109,39 @@ class VernaTileService : TileService() {
     }
 
     private fun toggle() {
-        if (isOn()) stopTunnel() else openAndConnect()
+        if (isOn()) stopTunnel() else connect()
+    }
+
+    /**
+     * Connects without opening the app, the way other VPN apps' tiles do.
+     *
+     * Through the running engine when there is one, or one started with no
+     * screen ([TileEngine]); its `main()` takes the waiting request. The app
+     * opens only when Android has to ask for VPN consent, which needs a screen
+     * -- the first connect, or after another VPN app took the slot.
+     */
+    private fun connect() {
+        if (!vpnPrepared()) {
+            openAndConnect()
+            return
+        }
+        TileBridge.requestConnect()
+        // At once, before any engine answers: a tile that does not react to a
+        // tap gets tapped again.
+        TileBridge.publish("busy", TileBridge.busyLabel)
+        val channel = TileBridge.channel
+        if (channel != null) {
+            channel.invokeMethod("connectRequested", null)
+        } else {
+            TileEngine.ensure(this)
+        }
+    }
+
+    /** Only asks; see EngineChannels.vpnPrepared. */
+    private fun vpnPrepared(): Boolean = try {
+        VpnService.prepare(this) == null
+    } catch (_: Exception) {
+        false
     }
 
     private fun isOn(): Boolean = when (TileBridge.uiState) {

@@ -8,6 +8,8 @@ import '../../../../core/l10n/app_strings.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../../core/theme/palette.dart';
 import '../../../settings/data/app_preferences.dart';
+import '../../../settings/presentation/screens/split_tunnel_screen.dart';
+import '../../../tunnel/presentation/providers/tunnel_provider.dart';
 import '../../../stats/data/usage_store.dart';
 import '../../../subscriptions/presentation/builtin_subscriptions_provider.dart';
 import '../../../subscriptions/presentation/user_subscriptions_provider.dart';
@@ -23,12 +25,12 @@ import '../../data/config_actions.dart';
 /// accent -- which made the last tab look like a screen borrowed from another
 /// app the moment you arrived from the connect screen.
 ///
-/// The design's four switches are not four switches here. Auto-connect is
-/// built, so it is a switch; kill switch, split tunneling and local network
-/// access are not, so they say so. A toggle that flips and changes nothing is
-/// worse than a missing feature -- and on a kill switch, which exists to
-/// promise that traffic stops when the tunnel does, it is the one place a
-/// decorative control could actually get someone hurt.
+/// The design's four switches are controls only where they are built.
+/// Auto-connect, split tunneling and local network access are; the kill switch
+/// is not, so it says so. A toggle that flips and changes nothing is worse
+/// than a missing feature -- and on a kill switch, which exists to promise
+/// that traffic stops when the tunnel does, it is the one place a decorative
+/// control could actually get someone hurt.
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
@@ -211,14 +213,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             const SizedBox(height: 10),
             _Row(
               title: s.splitTunneling,
-              subtitle: s.splitTunnelingHint,
-              trailing: _SoonBadge(label: s.notBuiltYet),
+              subtitle: s.splitCount(prefs.bypassApps.length),
+              trailing: Icon(Icons.chevron_right_rounded,
+                  size: 20, color: c.textMuted),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const SplitTunnelScreen(),
+              )),
             ),
             const SizedBox(height: 10),
             _Row(
               title: s.lanAccess,
               subtitle: s.lanAccessHint,
-              trailing: _SoonBadge(label: s.notBuiltYet),
+              trailing: _Switch(
+                value: prefs.lanDirect,
+                onChanged: (value) {
+                  ref.read(appPreferencesProvider.notifier).setLanDirect(value);
+                  if (ref.read(tunnelSnapshotProvider).isConnected) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text(s.appliesNextConnect)));
+                  }
+                },
+              ),
             ),
             const SizedBox(height: 10),
             // Read-only, because they are facts about how the tunnel is built

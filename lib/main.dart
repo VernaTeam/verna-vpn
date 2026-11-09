@@ -59,7 +59,65 @@ Future<void> main() async {
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
-  runApp(const ProviderScope(child: VernaApp()));
+  // Outside the widget tree, so the Quick Settings tile works with no screen:
+  // the tile can start this engine headless, and then no widget is ever built.
+  final container = ProviderContainer();
+  _QuickTileHost(container).start();
+  runApp(UncontrolledProviderScope(
+    container: container,
+    child: const VernaApp(),
+  ));
+}
+
+/// The Quick Settings tile's side of the app, independent of any screen.
+class _QuickTileHost {
+  _QuickTileHost(this._container);
+
+  final ProviderContainer _container;
+
+  void start() {
+    QuickTile.attach(
+      onConnectRequested: _onConnectRequested,
+      onDisconnectRequested: () =>
+          _container.read(tunnelSnapshotProvider.notifier).disconnect(),
+    );
+    _container.listen<TunnelSnapshot>(
+      tunnelSnapshotProvider,
+      (_, next) => _publish(next),
+      fireImmediately: true,
+    );
+    // A tap that started this engine, or opened the app for consent, is
+    // waiting already.
+    unawaited(_onConnectRequested());
+  }
+
+  void _publish(TunnelSnapshot snapshot) {
+    unawaited(QuickTile.publish(
+      snapshot,
+      busyLabel: _container.read(stringsProvider).statusSearching,
+    ));
+  }
+
+  Future<void> _onConnectRequested() async {
+    if (!await QuickTile.takeConnectRequest()) return;
+    final controller = _container.read(tunnelSnapshotProvider.notifier);
+    await controller.restored;
+    final tunnel = _container.read(tunnelSnapshotProvider);
+    if (tunnel.isConnected || tunnel.isBusy) {
+      // The tile switched itself to "searching" on the tap; put it right.
+      QuickTile.forgetPublished();
+      _publish(tunnel);
+      return;
+    }
+    // The screen that shows it, for whoever opens the app meanwhile.
+    _container.read(shellTabProvider.notifier).select(0);
+    await controller.retry();
+    final after = _container.read(tunnelSnapshotProvider);
+    if (after.phase == TunnelPhase.failed) {
+      final s = _container.read(stringsProvider);
+      unawaited(QuickTile.toast('Verna VPN: ${failureTitle(s, after.failure)}'));
+    }
+  }
 }
 
 /// The first few stack frames. A whole Dart stack is a screenful; the top of
@@ -191,65 +249,15 @@ class _BootState extends ConsumerState<_Boot> {
   bool _ready = false;
 
   @override
-  void initState() {
-    super.initState();
-    QuickTile.attach(
-      onConnectRequested: _onTileConnect,
-      onDisconnectRequested: _onTileDisconnect,
-    );
-  }
-
-  @override
-  void dispose() {
-    QuickTile.detach();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    if (_ready) {
-      ref.listen(tunnelSnapshotProvider, (_, next) => _publishToTile(next));
-      return const AppShell();
-    }
+    if (_ready) return const AppShell();
     return SplashScreen(
       onDone: () {
         if (!mounted) return;
         setState(() => _ready = true);
-        _publishToTile(ref.read(tunnelSnapshotProvider));
         _autoConnect();
       },
     );
-  }
-
-  void _publishToTile(TunnelSnapshot snapshot) {
-    unawaited(QuickTile.publish(
-      snapshot,
-      busyLabel: ref.read(stringsProvider).statusSearching,
-    ));
-  }
-
-  /// During the boot screen the request stays waiting: [_autoConnect] takes it.
-  Future<void> _onTileConnect() async {
-    if (!_ready) return;
-    final requested = await QuickTile.takeConnectRequest();
-    if (requested && mounted) await _connectFromTile();
-  }
-
-  /// Thrown during the boot screen, where the tile falls back to stopping the
-  /// service directly: nothing here has attached to the tunnel yet.
-  Future<void> _onTileDisconnect() async {
-    if (!_ready) {
-      throw PlatformException(code: 'not_ready');
-    }
-    await ref.read(tunnelSnapshotProvider.notifier).disconnect();
-  }
-
-  /// The same connect as the big button, on the screen that shows it.
-  Future<void> _connectFromTile() async {
-    final tunnel = ref.read(tunnelSnapshotProvider);
-    if (tunnel.isConnected || tunnel.isBusy) return;
-    ref.read(shellTabProvider.notifier).select(0);
-    await ref.read(tunnelSnapshotProvider.notifier).retry();
   }
 
   /// Starts the tunnel on launch, if the user asked for that.
@@ -258,11 +266,6 @@ class _BootState extends ConsumerState<_Boot> {
   /// testing candidates, and doing that while the splash is still up would show
   /// a finished progress bar over an app that is still working.
   Future<void> _autoConnect() async {
-    if (await QuickTile.takeConnectRequest()) {
-      if (mounted) await _connectFromTile();
-      return;
-    }
-    if (!mounted) return;
     final prefs = await ref.read(appPreferencesProvider.future);
     if (!prefs.autoConnect || !mounted) return;
     final tunnel = ref.read(tunnelSnapshotProvider);

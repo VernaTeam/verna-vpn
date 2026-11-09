@@ -71,6 +71,18 @@ class NetworkStatus {
     }
   }
 
+  /// Whether Android would start this app's VPN without asking, or null
+  /// when it cannot say. Asking does not change anything.
+  static Future<bool?> vpnPrepared() async {
+    try {
+      return await _channel.invokeMethod<bool>('vpnPrepared');
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   static Future<bool> hasInternet() async {
     try {
       return await _channel.invokeMethod<bool>('hasInternet') ?? true;

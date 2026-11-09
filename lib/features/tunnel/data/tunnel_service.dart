@@ -258,6 +258,27 @@ class TunnelService {
   /// Set by a start that failed to bind: the next start moves to free ports.
   bool _portsHeld = false;
 
+  /// Apps that go around the tunnel, from Settings. Read at each tunnel start.
+  List<String> bypassApps = const [];
+
+  /// Whether private addresses are reached directly, from Settings.
+  bool lanDirect = false;
+
+  /// The home network's private ranges, minus the tunnel's own 172.19/16.
+  ///
+  /// 172.16.0.0/12 whole would include the tunnel's address and its DNS peer
+  /// at 172.19.0.2, and every name lookup would then leave by Wi-Fi instead
+  /// of the tunnel -- nothing would resolve. So that block is cut around it.
+  static const List<String> _lanRanges = [
+    '10.0.0.0/8',
+    '172.16.0.0/15',
+    '172.18.0.0/16',
+    '172.20.0.0/14',
+    '172.24.0.0/13',
+    '192.168.0.0/16',
+    '169.254.0.0/16',
+  ];
+
   /// Candidates in one measured group.
   ///
   /// The core tests these itself, in parallel, on one service start, so a
@@ -923,7 +944,11 @@ class TunnelService {
       // appeared and Android said no on its own, which is what another VPN
       // app set to Always-on does to every other app.
       final asked = DateTime.now();
-      if (!await _client.requestVPNPermission()) {
+      // Not asked of the plugin when Android already allows it: the plugin
+      // answers "no" whenever it has no Activity, and a connect started from
+      // the Quick Settings tile has none.
+      if (await NetworkStatus.vpnPrepared() != true &&
+          !await _client.requestVPNPermission()) {
         final instant =
             DateTime.now().difference(asked) < const Duration(milliseconds: 900);
         _log.warn('Connect stopped',
@@ -1783,6 +1808,18 @@ class TunnelService {
   /// Ends on whichever comes first: every outbound tested, no new result for
   /// [_settleWindow] (the stragglers are servers that will not answer at all),
   /// or the hard ceiling.
+  /// Whether the job the core is running for has been called off.
+  ///
+  /// Each job by its own flag. Both used to be checked together, and each
+  /// flag outlives its job: `_cancelled` stays set after the user's last
+  /// Disconnect, `_testCancelled` after a connect stopped the device test. So
+  /// the device test run after any disconnect, and every connect that
+  /// interrupted the device test, ended every probe batch at once with nobody
+  /// answering. On the J7 on 2026-11-09 that was "2 of 284 carried traffic",
+  /// batches of 20 finished in about a second against an 8 s floor -- and
+  /// all the rest recorded as dead. In the code since 1.0.0.
+  bool get _stopRequested => _testing ? _testCancelled : _cancelled;
+
   Future<void> _awaitGroupTested(int expected) async {
     final start = DateTime.now();
     final floor = start.add(_probeFloor);
@@ -1791,7 +1828,7 @@ class TunnelService {
     var lastChange = start;
 
     while (DateTime.now().isBefore(deadline)) {
-      if (_testCancelled || _cancelled) return;
+      if (_stopRequested) return;
 
       // Counted on answers, not on the core's own "tested" stamp: a server
       // that will never answer looks identical to one still being tried, and
@@ -1868,9 +1905,20 @@ class TunnelService {
     try {
       await _awaitPortFree();
       await _client.checkConfig(json);
+      if (bypassApps.isNotEmpty || lanDirect) {
+        _log.info('Tunnel routing',
+            detail: '${bypassApps.length} apps outside'
+                '${lanDirect ? ', local network direct' : ''}');
+      }
       await _client.connect(SessionOptions(
         config: json,
         networkMode: NetworkMode.vpn,
+        perAppProxy: bypassApps.isEmpty
+            ? null
+            : PerAppProxyOptions(
+                mode: PerAppProxyMode.exclude,
+                packages: bypassApps,
+              ),
         notification: NotificationConfig(
           // Reads left to right even on a Persian system: without the mark the
           // shell reorders the pieces around the pipe.
@@ -2017,7 +2065,7 @@ class TunnelService {
     final deadline = DateTime.now().add(Duration(seconds: seconds));
     while (DateTime.now().isBefore(deadline)) {
       if (_state == want) return true;
-      if (_cancelled && want == ServiceState.started) return false;
+      if (_stopRequested && want == ServiceState.started) return false;
       await Future<void>.delayed(const Duration(milliseconds: 300));
     }
     return _state == want;
@@ -2161,6 +2209,9 @@ class TunnelService {
           'auto_route': true,
           'strict_route': false,
           'stack': 'mixed',
+          // Not routed into the tunnel at all: the router's page, a printer
+          // or a TV answer on the home network, not from abroad.
+          if (lanDirect) 'route_exclude_address': _lanRanges,
         }
       ],
       'outbounds': [
@@ -2221,6 +2272,10 @@ class TunnelService {
           // The action hands the query to sing-box's own resolver instead,
           // which is what the dns block was written for.
           {'protocol': 'dns', 'action': 'hijack-dns'},
+
+          // After DNS, which is addressed to the private 172.19.0.2: anything
+          // private that still reaches the tunnel leaves directly.
+          if (lanDirect) {'ip_is_private': true, 'outbound': 'direct'},
         ],
       },
     });

@@ -500,8 +500,23 @@ class S {
       'Block traffic if the tunnel drops');
   String get splitTunneling => _t('تونل انتخابی', 'Split tunneling');
   String get splitTunnelingHint =>
-      _t('انتخاب اینکه کدام برنامه‌ها از تونل بروند',
-         'Choose which apps use the tunnel');
+      _t('برنامه‌هایی که بدون فیلترشکن وصل شوند',
+         'Apps that skip the VPN');
+
+  /// The row's summary once something is chosen.
+  String splitCount(int n) => n == 0
+      ? splitTunnelingHint
+      : _t('$n برنامه بدون فیلترشکن',
+          n == 1 ? '1 app skips the VPN' : '$n apps skip the VPN');
+
+  String get splitIntro => _t(
+      'برنامه‌هایی که تیک بزنید مستقیم به اینترنت وصل می‌شوند و از فیلترشکن رد نمی‌شوند؛ مثلاً اپ بانک یا برنامه‌هایی که با IP خارج کار نمی‌کنند.',
+      'Ticked apps go straight to the internet instead of through the VPN: a banking app, for example, or any app that refuses a foreign address.');
+  String get appliesNextConnect => _t(
+      'تغییرات از اتصال بعدی اعمال می‌شود.',
+      'Changes take effect the next time you connect.');
+  String get searchApps => _t('جستجوی برنامه', 'Search apps');
+  String get noAppsFound => _t('برنامه‌ای پیدا نشد', 'No apps found');
   String get lanAccess => _t('دسترسی به شبکه محلی', 'Local network access');
   String get lanAccessHint => _t(
       'دستگاه‌های شبکه خانگی بدون تونل',
