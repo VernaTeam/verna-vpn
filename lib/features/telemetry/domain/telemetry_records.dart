@@ -40,7 +40,10 @@ enum EndedBy {
   network,
   coreDied,
   appKilled,
-  error;
+  error,
+
+  /// Another VPN app took over. See `classifyOutsideStop`.
+  revoked;
 
   String get wire => switch (this) {
         EndedBy.user => 'user',
@@ -48,6 +51,7 @@ enum EndedBy {
         EndedBy.coreDied => 'core_died',
         EndedBy.appKilled => 'app_killed',
         EndedBy.error => 'error',
+        EndedBy.revoked => 'revoked',
       };
 }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app_shell.dart';
+import 'features/tunnel/data/quick_tile.dart';
+import 'features/tunnel/domain/tunnel_snapshot.dart';
 import 'features/tunnel/presentation/providers/tunnel_provider.dart';
 import 'features/settings/data/app_preferences.dart';
 import 'core/theme/app_theme.dart';
@@ -188,15 +191,65 @@ class _BootState extends ConsumerState<_Boot> {
   bool _ready = false;
 
   @override
+  void initState() {
+    super.initState();
+    QuickTile.attach(
+      onConnectRequested: _onTileConnect,
+      onDisconnectRequested: _onTileDisconnect,
+    );
+  }
+
+  @override
+  void dispose() {
+    QuickTile.detach();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    if (_ready) return const AppShell();
+    if (_ready) {
+      ref.listen(tunnelSnapshotProvider, (_, next) => _publishToTile(next));
+      return const AppShell();
+    }
     return SplashScreen(
       onDone: () {
         if (!mounted) return;
         setState(() => _ready = true);
+        _publishToTile(ref.read(tunnelSnapshotProvider));
         _autoConnect();
       },
     );
+  }
+
+  void _publishToTile(TunnelSnapshot snapshot) {
+    unawaited(QuickTile.publish(
+      snapshot,
+      busyLabel: ref.read(stringsProvider).statusSearching,
+    ));
+  }
+
+  /// During the boot screen the request stays waiting: [_autoConnect] takes it.
+  Future<void> _onTileConnect() async {
+    if (!_ready) return;
+    final requested = await QuickTile.takeConnectRequest();
+    if (requested && mounted) await _connectFromTile();
+  }
+
+  /// Thrown during the boot screen, where the tile falls back to stopping the
+  /// service directly: nothing here has attached to the tunnel yet.
+  Future<void> _onTileDisconnect() async {
+    if (!_ready) {
+      throw PlatformException(code: 'not_ready');
+    }
+    await ref.read(tunnelSnapshotProvider.notifier).disconnect();
+  }
+
+  /// The same connect as the big button, on the screen that shows it.
+  Future<void> _connectFromTile() async {
+    final tunnel = ref.read(tunnelSnapshotProvider);
+    if (tunnel.isConnected || tunnel.isBusy) return;
+    ref.read(shellTabProvider.notifier).select(0);
+    await ref.read(tunnelSnapshotProvider.notifier).retry();
   }
 
   /// Starts the tunnel on launch, if the user asked for that.
@@ -205,6 +258,11 @@ class _BootState extends ConsumerState<_Boot> {
   /// testing candidates, and doing that while the splash is still up would show
   /// a finished progress bar over an app that is still working.
   Future<void> _autoConnect() async {
+    if (await QuickTile.takeConnectRequest()) {
+      if (mounted) await _connectFromTile();
+      return;
+    }
+    if (!mounted) return;
     final prefs = await ref.read(appPreferencesProvider.future);
     if (!prefs.autoConnect || !mounted) return;
     final tunnel = ref.read(tunnelSnapshotProvider);

@@ -56,6 +56,21 @@ class NetworkStatus {
     }
   }
 
+  /// Whether one of this app's core services is alive, or null when Android
+  /// cannot say. Asked of Android, not of the plugin, whose "stopped" also
+  /// means "lost its connection to a core that is still running" -- see
+  /// `CoreServices.kt`. [vpnOnly] leaves out the device test's proxy core.
+  static Future<bool?> coreRunning({bool vpnOnly = false}) async {
+    try {
+      return await _channel
+          .invokeMethod<bool>('coreRunning', {'vpnOnly': vpnOnly});
+    } on PlatformException {
+      return null;
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
   static Future<bool> hasInternet() async {
     try {
       return await _channel.invokeMethod<bool>('hasInternet') ?? true;

@@ -6,6 +6,11 @@ import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter_singbox_client/flutter_singbox_client.dart';
+// For re-running the engine's setup, which the public client memoizes: the
+// only way to move the core's command port or re-attach to a running core.
+// ignore: implementation_imports
+import 'package:flutter_singbox_client/src/platform/singbox_platform_interface.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../configs/domain/vpn_config.dart';
 import '../../diagnostics/data/app_log.dart';
@@ -20,6 +25,7 @@ import 'known_good_store.dart';
 import 'network_status.dart';
 import 'network_watcher.dart';
 import 'notification_permission.dart';
+import 'outside_stop.dart';
 import 'singbox_outbound.dart';
 
 /// Owns the tunnel: picks a config that actually works, brings it up, and
@@ -70,6 +76,10 @@ class TunnelService {
   /// ending, a tunnel torn down, the notification's stop button.
   DateTime? _stoppedAt;
 
+  /// Counts connects, so a wait can tell whether one started during it even if
+  /// it has already finished or failed.
+  int _connects = 0;
+
   final NetworkWatcher _network = NetworkWatcher();
   StreamSubscription<NetworkChange>? _networkSub;
 
@@ -108,6 +118,11 @@ class TunnelService {
   /// TelemetrySink.
   void Function(TunnelUpFacts facts)? onTunnelUp;
   void Function(EndedBy cause)? onTunnelDown;
+
+  /// The tunnel ended and not by this app's hand. The cause takes a while to
+  /// establish, so it arrives as a future: the session's end is now, and the
+  /// screen does not wait for the answer.
+  void Function(Future<EndedBy> cause)? onTunnelStoppedOutside;
   void Function(TunnelFailedFacts facts)? onConnectFailed;
 
   /// When the current connect began, and how many servers it has tried.
@@ -232,7 +247,16 @@ class TunnelService {
   static const String _groupTag = 'auto';
 
   /// Local port the proxy-mode session listens on while testing.
-  static const int _probePort = 21080;
+  ///
+  /// Moved, with the command port, when a core left behind is still holding
+  /// them -- see [_movePortsIfHeld].
+  int _probePort = 21080;
+
+  /// The core's control port, 10086 until something is found sitting on it.
+  int _commandPort = 10086;
+
+  /// Set by a start that failed to bind: the next start moves to free ports.
+  bool _portsHeld = false;
 
   /// Candidates in one measured group.
   ///
@@ -352,9 +376,10 @@ class TunnelService {
     // The core reports a failed start here and nowhere else: connect() returns
     // normally and the service simply never reaches started, so without this a
     // rejected config looks identical to a slow one.
-    _faultSub = _client.faultStream.listen(
-      (fault) => _log.error('Core fault', detail: fault),
-    );
+    _faultSub = _client.faultStream.listen((fault) {
+      _log.error('Core fault', detail: fault);
+      if (fault.contains('address already in use')) _portsHeld = true;
+    });
 
     _network.start();
     _networkSub ??= _network.changes.listen(_onNetworkChange);
@@ -402,17 +427,77 @@ class TunnelService {
         previous != ServiceState.stopped &&
         _snapshot.phase == TunnelPhase.connected &&
         !_cancelled) {
-      _log.info('Tunnel ended', detail: 'stopped outside the app');
-      onTunnelDown?.call(EndedBy.coreDied);
-      _connectedAt = null;
-      unawaited(ActiveSessionStore.clear());
-      _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+      unawaited(_confirmOutsideStop());
     }
 
     // And the other way: a running service can surface late, after this
     // screen already decided nothing was up (see restore). Adopting it here
     // is what keeps the screen from saying OFF over a live tunnel. Not while
     // the device test runs -- its proxy-mode core starts the service too.
+    _onServiceStarted(state, previous);
+  }
+
+  /// A "stopped" from the plugin while connected, checked with Android first.
+  ///
+  /// The plugin says stopped whenever its control link to the core drops, and
+  /// that link can drop under a tunnel that is still running. Taken at its
+  /// word, the screen went idle over a live VPN, the session was recorded as
+  /// ended, and the next Connect started a second core into the first one's
+  /// ports -- the stuck state that only clearing the app's data cured.
+  Future<void> _confirmOutsideStop() async {
+    final deadline = DateTime.now().add(const Duration(seconds: 3));
+    bool? running = await NetworkStatus.coreRunning(vpnOnly: true);
+    while (running == true && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      running = await NetworkStatus.coreRunning(vpnOnly: true);
+    }
+    // Something else moved on in the meantime: a disconnect, a new connect.
+    if (_state != ServiceState.stopped ||
+        _snapshot.phase != TunnelPhase.connected ||
+        _cancelled) {
+      return;
+    }
+    if (running == true) {
+      _log.warn('Lost the link to the core',
+          detail: 'the tunnel is still running; re-attaching');
+      await _reinitEngine();
+      return;
+    }
+    _log.info('Tunnel ended', detail: 'stopped outside the app');
+    final connects = _connects;
+    onTunnelStoppedOutside?.call(classifyOutsideStop(
+      vpnActive: NetworkStatus.vpnActive,
+      superseded: () =>
+          _connects != connects || _snapshot.phase != TunnelPhase.idle,
+    ));
+    _connectedAt = null;
+    unawaited(ActiveSessionStore.clear());
+    _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+  }
+
+  /// Runs the engine's setup again, with [_commandPort].
+  ///
+  /// The plugin re-reads the port and re-attaches its control link to a core
+  /// that is running, which is what both callers need. Same paths as the
+  /// client's own first setup, or the core would move its working files.
+  Future<void> _reinitEngine() async {
+    try {
+      final cache = await getApplicationCacheDirectory();
+      final temp = await getTemporaryDirectory();
+      final root = '${cache.path}/flutter_singbox_client_engine';
+      await SingboxPlatformInterface.instance.initialize(
+        EngineOptions(commandServerPort: _commandPort).withPaths(
+          basePath: root,
+          workingPath: '$root/working',
+          tempPath: temp.path,
+        ),
+      );
+    } catch (e) {
+      _log.warn('Engine setup failed', detail: '$e');
+    }
+  }
+
+  void _onServiceStarted(ServiceState state, ServiceState previous) {
     if (state == ServiceState.started &&
         previous != ServiceState.started &&
         _snapshot.phase == TunnelPhase.idle &&
@@ -678,8 +763,10 @@ class TunnelService {
         _log.warn('Restored tunnel carried no traffic',
             detail: 'it was never verified; stopped');
         _connectedAt = null;
-        await _stop();
+        // Idle first: stopping from `connected` reads as a stop from outside
+        // the app, and this one is the app's own.
         _emit(const TunnelSnapshot(phase: TunnelPhase.idle));
+        await _stop();
       } else {
         _log.warn('Restored tunnel: no answer yet',
             detail: 'it carried traffic before; checking again in '
@@ -783,6 +870,7 @@ class TunnelService {
       }
     }
     _cancelled = false;
+    _connects++;
     _lastCandidates = candidates;
     _lastUserChose = userChose;
     _lastPreferredCountry = preferredCountry;
@@ -1842,16 +1930,81 @@ class TunnelService {
   ///
   /// The guard belongs at the start, where every path passes, rather than at
   /// the end of one of them.
+  ///
+  /// And it waits for Android to say the core service is gone, not only for
+  /// the plugin's state: a start sent to a service that is still alive reuses
+  /// it, and the core already in it is orphaned with both ports (see
+  /// `CoreServices.kt`).
   Future<void> _awaitPortFree() async {
     final stopped = _stoppedAt;
-    if (stopped == null) return;
-    final elapsed = DateTime.now().difference(stopped);
-    if (elapsed >= _teardownSettle) return;
-    await Future<void>.delayed(_teardownSettle - elapsed);
+    if (stopped != null) {
+      final elapsed = DateTime.now().difference(stopped);
+      if (elapsed < _teardownSettle) {
+        await Future<void>.delayed(_teardownSettle - elapsed);
+      }
+    }
+    if (!await _awaitCoreGone(const Duration(seconds: 4))) {
+      _log.warn('Core still running before a start', detail: 'stopping it');
+      try {
+        await _client.disconnect();
+      } catch (_) {
+        // Then the wait below says so.
+      }
+      if (!await _awaitCoreGone(const Duration(seconds: 6))) {
+        _log.warn('Core would not stop', detail: 'starting anyway');
+      }
+    }
+    await _movePortsIfHeld();
   }
 
+  /// True once no core service of this app is alive -- or when Android cannot
+  /// say, which is what this used to assume every time.
+  Future<bool> _awaitCoreGone(Duration limit) async {
+    final deadline = DateTime.now().add(limit);
+    while (true) {
+      if (await NetworkStatus.coreRunning() != true) return true;
+      if (!DateTime.now().isBefore(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
+  /// Moves to free ports after a start failed to bind its own.
+  ///
+  /// The waits above stop this app from leaving a core behind. This is for
+  /// one that is already there -- every 1.0.9 phone that hit the bug, until
+  /// its process ends -- and for any way of leaving one that is not known
+  /// yet. It cannot be stopped from here; it can be stepped around.
+  Future<void> _movePortsIfHeld() async {
+    if (!_portsHeld) return;
+    _portsHeld = false;
+    final command = await _freePort();
+    final probe = await _freePort();
+    if (command == null || probe == null) return;
+    _commandPort = command;
+    _probePort = probe;
+    await _reinitEngine();
+    _log.warn('Core ports were held',
+        detail: 'a core left running owns them; moved to $command and $probe');
+  }
+
+  static Future<int?> _freePort() async {
+    try {
+      final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      final port = socket.port;
+      await socket.close();
+      return port;
+    } on SocketException {
+      return null;
+    }
+  }
+
+  /// Stops the core, whatever the plugin's state says.
+  ///
+  /// This returned early when the state already read stopped -- and that state
+  /// is the plugin's guess from its control link, which drops while a core is
+  /// still running. Skipping the stop then is how a core was left running
+  /// with nobody holding it. Stopping something already stopped costs nothing.
   Future<void> _stop() async {
-    if (_state == ServiceState.stopped) return;
     try {
       await _client.disconnect();
     } catch (_) {

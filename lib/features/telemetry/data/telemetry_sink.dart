@@ -9,6 +9,7 @@ import '../../configs/presentation/providers/local_test_provider.dart';
 import '../../diagnostics/data/app_log.dart';
 import '../../settings/data/app_preferences.dart';
 import '../../tunnel/data/network_status.dart';
+import '../../tunnel/data/quick_tile.dart';
 import '../../tunnel/domain/tunnel_snapshot.dart';
 import '../../tunnel/presentation/providers/own_ip_provider.dart';
 import '../../tunnel/presentation/providers/tunnel_provider.dart';
@@ -162,6 +163,32 @@ class TelemetrySink {
     unawaited(flush());
   }
 
+  /// The tunnel stopped from outside the app, for a reason still being
+  /// established.
+  ///
+  /// Taken off [_open] and timed now: a new connect can open the next session
+  /// during the wait, and this one ended when it ended. The copy on disk stays
+  /// until the cause is known, so a process that dies during the wait still
+  /// leaves a row for the next launch -- unless that new session has replaced
+  /// it, which is why it is only cleared when nothing else is open.
+  Future<void> tunnelStoppedOutside(Future<EndedBy> cause) async {
+    final session = _open;
+    _open = null;
+    _heartbeat?.cancel();
+    _heartbeat = null;
+    if (session != null) {
+      session.durationS =
+          DateTime.now().difference(session.startedAt).inSeconds;
+    }
+    final ended = await cause;
+    if (_open == null) await OpenSessionStore.clear();
+    if (session == null) return;
+    session.endedBy = ended;
+    AppLog.instance.info('Outside stop classified', detail: ended.wire);
+    await _ref.read(telemetryQueueProvider).addSession(session);
+    unawaited(flush());
+  }
+
   /// A connect that ended with nothing.
   Future<void> connectFailed(TunnelFailedFacts facts) async {
     if (!await _allowed()) return;
@@ -210,6 +237,8 @@ class TelemetrySink {
   /// Closes a session the last run of the app never got to finish -- or,
   /// when its tunnel is still running, picks it back up.
   Future<void> recoverAbandoned() async {
+    // Read whatever else happens here, or it would label a later session.
+    final stoppedFromTile = await QuickTile.takeStoppedAway();
     final session = await OpenSessionStore.takeAbandoned();
     if (session == null) return;
     if (!await _allowed()) return;
@@ -253,8 +282,11 @@ class TelemetrySink {
           detail: 'its tunnel is still running');
       return;
     }
+    // The Quick Settings tile stopped it with no engine running to say so.
+    if (stoppedFromTile) session.endedBy = EndedBy.user;
     AppLog.instance.info('Recovered an unfinished session',
-        detail: '${session.durationS ?? 0}s, ended by app_killed');
+        detail: '${session.durationS ?? 0}s, '
+            'ended by ${session.endedBy?.wire}');
     await _ref.read(telemetryQueueProvider).addSession(session);
     unawaited(flush());
   }

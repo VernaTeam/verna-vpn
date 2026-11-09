@@ -34,11 +34,14 @@ final tunnelServiceProvider = Provider<TunnelService>((ref) {
   final telemetry = ref.read(telemetrySinkProvider);
   service.onTunnelUp = (facts) => unawaited(telemetry.tunnelUp(facts));
   service.onTunnelDown = (cause) => unawaited(telemetry.tunnelDown(cause));
+  service.onTunnelStoppedOutside =
+      (cause) => unawaited(telemetry.tunnelStoppedOutside(cause));
   service.onConnectFailed =
       (facts) => unawaited(telemetry.connectFailed(facts));
   ref.onDispose(() {
     service.onTunnelUp = null;
     service.onTunnelDown = null;
+    service.onTunnelStoppedOutside = null;
     service.onConnectFailed = null;
   });
   ref.onDispose(service.dispose);

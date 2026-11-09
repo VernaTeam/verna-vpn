@@ -125,7 +125,14 @@ void main() {
     });
 
     test('every ending has a wire name the server knows', () {
-      const known = {'user', 'network', 'core_died', 'app_killed', 'error'};
+      const known = {
+        'user',
+        'network',
+        'core_died',
+        'app_killed',
+        'error',
+        'revoked',
+      };
       for (final ending in EndedBy.values) {
         expect(known.contains(ending.wire), isTrue,
             reason: '${ending.name} sends "${ending.wire}"');

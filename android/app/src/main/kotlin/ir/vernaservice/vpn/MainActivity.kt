@@ -2,6 +2,7 @@ package ir.vernaservice.vpn
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.Network
@@ -50,6 +51,7 @@ class MainActivity : FlutterActivity() {
         const val REQUEST_NOTIFICATIONS = 4711
     }
 
+    private var tileChannel: MethodChannel? = null
     private var networkEvents: EventChannel.EventSink? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private val main = Handler(Looper.getMainLooper())
@@ -64,6 +66,9 @@ class MainActivity : FlutterActivity() {
                     "hasInternet" -> result.success(hasInternet())
                     "transport" -> result.success(underlyingTransport())
                     "vpnActive" -> result.success(vpnActive())
+                    "coreRunning" -> result.success(
+                        CoreServices.running(this, call.argument<Boolean>("vpnOnly") == true),
+                    )
                     "mobileOperator" -> result.success(mobileOperator())
                     "requestNotificationPermission" -> {
                         requestNotifications()
@@ -72,6 +77,21 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+
+        val tile = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, TileBridge.CHANNEL)
+        tile.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "publish" -> {
+                    TileBridge.publish(call.argument("state"), call.argument("busyLabel"))
+                    result.success(null)
+                }
+                "takeConnectRequest" -> result.success(TileBridge.takeConnectRequest())
+                "takeStoppedAway" -> result.success(TileBridge.takeStoppedAway(this))
+                else -> result.notImplemented()
+            }
+        }
+        tileChannel = tile
+        TileBridge.channel = tile
 
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, NETWORK_EVENTS)
             .setStreamHandler(object : EventChannel.StreamHandler {
@@ -85,6 +105,30 @@ class MainActivity : FlutterActivity() {
                     networkEvents = null
                 }
             })
+    }
+
+    override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        tileChannel?.let { TileBridge.engineGone(it) }
+        tileChannel = null
+        super.cleanUpFlutterEngine(flutterEngine)
+    }
+
+    // Both, and only once the activity is in front, because the connect may
+    // need to show Android's consent dialog. A tap on the tile with this app
+    // already on screen is a new intent with no resume at all.
+    override fun onResume() {
+        super.onResume()
+        announceTileRequest()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        announceTileRequest()
+    }
+
+    /** Only says one is waiting. Dart takes it, so two of these start one connect. */
+    private fun announceTileRequest() {
+        if (TileBridge.hasConnectRequest()) tileChannel?.invokeMethod("connectRequested", null)
     }
 
     // ── notifications ────────────────────────────────────────────────────────
